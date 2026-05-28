@@ -9,10 +9,11 @@ from nicegui import app as nice_app
 from nicegui import ui
 
 from lecture_reconstructor.api_client import ApiConfigurationError, OpenAICompatibleClient
+from lecture_reconstructor.batch import generate_batch, list_batch_folders
 from lecture_reconstructor.generator import generate_lecture
 from lecture_reconstructor.material import extract_materials, scan_materials
 from lecture_reconstructor.models import GenerationConfig, ProviderConfig
-from lecture_reconstructor.providers import PROVIDERS, get_provider
+from lecture_reconstructor.providers import PROVIDERS
 from lecture_reconstructor.settings import (
     SETTINGS_PATH,
     delete_api_key,
@@ -33,7 +34,7 @@ class TaskState:
     def __init__(self) -> None:
         self.logs: list[str] = []
         self.errors: list[str] = []
-        self.result_html: str = ""
+        self.result_html = ""
         self.history: list[dict[str, str]] = []
         self.running = False
 
@@ -72,6 +73,7 @@ def initial_settings() -> dict[str, Any]:
     settings["api_key_env"] = settings.get("api_key_env") or provider.api_key_env
     settings["max_tokens"] = int(settings.get("max_tokens") or DEFAULT_MAX_TOKENS)
     settings["custom_providers"] = settings.get("custom_providers") or {}
+    settings["batch_mode"] = bool(settings.get("batch_mode", False))
     return settings
 
 
@@ -116,7 +118,7 @@ def main_page() -> None:
             with ui.row().classes("w-full items-center justify-between"):
                 with ui.column().classes("gap-1"):
                     ui.label("从材料文件夹生成教科书级 HTML 讲义").classes("text-3xl font-bold text-[#252a31]")
-                    ui.label("像 Chatbox 一样选择模型，也可以接入任意 OpenAI 兼容 API。").classes("text-[#6f675d]")
+                    ui.label("可单模块生成，也可按 input 下的子文件夹批量生成。").classes("text-[#6f675d]")
                 status_badge = ui.badge("Idle", color="grey").classes("text-base px-3 py-2")
 
             with ui.tabs().classes("w-full") as tabs:
@@ -157,8 +159,11 @@ def main_page() -> None:
                         with ui.row().classes("items-center gap-6 mt-3"):
                             stream = ui.switch("流式生成", value=bool(settings["stream"]))
                             vision_ocr = ui.switch("视觉 OCR", value=bool(settings["enable_vision_ocr"]))
+                            batch_mode = ui.switch("批量子文件夹模式", value=bool(settings["batch_mode"]))
                             remember_key = ui.switch("记住 API Key（系统钥匙串）", value=bool(settings["remember_api_key"]))
                             test_label = ui.label("").classes("text-sm")
+
+                        ui.label("批量模式：输入目录应包含 module1、module2 等一级子文件夹；程序按字母顺序逐个生成，每个子文件夹使用全新的 API 上下文。").classes("text-xs text-[#6f675d]")
 
                         def current_settings() -> dict[str, Any]:
                             return {
@@ -178,6 +183,7 @@ def main_page() -> None:
                                 "max_tokens": int(max_tokens.value or DEFAULT_MAX_TOKENS),
                                 "stream": bool(stream.value),
                                 "enable_vision_ocr": bool(vision_ocr.value),
+                                "batch_mode": bool(batch_mode.value),
                                 "remember_api_key": bool(remember_key.value),
                             }
 
@@ -257,6 +263,7 @@ def main_page() -> None:
                             max_tokens.value = settings["max_tokens"]
                             stream.value = settings["stream"]
                             vision_ocr.value = settings["enable_vision_ocr"]
+                            batch_mode.value = settings["batch_mode"]
                             remember_key.value = settings["remember_api_key"]
                             api_key.value = os.getenv(env_hint.value or "", "") or load_api_key(provider_select.value)
                             refresh_model_options(provider_from_catalog(provider_catalog, provider_select.value))
@@ -311,10 +318,22 @@ def main_page() -> None:
 
                         def scan_only() -> None:
                             try:
-                                docs = scan_materials(Path(input_dir.value))
-                                material_table.rows = [doc.to_dict() for doc in docs]
+                                if batch_mode.value:
+                                    folders = list_batch_folders(Path(input_dir.value))
+                                    material_table.rows = [
+                                        {
+                                            "relative_path": folder.name,
+                                            "material_type": "folder",
+                                            "status": f"batch item {index}/{len(folders)}",
+                                        }
+                                        for index, folder in enumerate(folders, start=1)
+                                    ]
+                                    ui.notify(f"发现 {len(folders)} 个子文件夹，将按字母顺序批量处理。", color="positive")
+                                else:
+                                    docs = scan_materials(Path(input_dir.value))
+                                    material_table.rows = [doc.to_dict() for doc in docs]
+                                    ui.notify(f"发现 {len(docs)} 个支持的材料文件。", color="positive")
                                 material_table.update()
-                                ui.notify(f"发现 {len(docs)} 个支持的材料文件。", color="positive")
                             except Exception as exc:  # noqa: BLE001
                                 ui.notify(str(exc), color="negative")
 
@@ -353,7 +372,6 @@ def main_page() -> None:
                                 key = resolve_api_key()
                                 if not key:
                                     raise ApiConfigurationError("缺少 API Key，不能生成。")
-                                client = OpenAICompatibleClient(provider, key)
                                 config = GenerationConfig(
                                     input_dir=Path(input_dir.value),
                                     output_root=Path(output_root.value),
@@ -365,6 +383,45 @@ def main_page() -> None:
                                     stream=bool(stream.value),
                                     enable_vision_ocr=bool(vision_ocr.value),
                                 )
+
+                                def make_client() -> OpenAICompatibleClient:
+                                    fresh_provider = ProviderConfig(**provider.to_dict())
+                                    return OpenAICompatibleClient(fresh_provider, key)
+
+                                if batch_mode.value:
+                                    state.log("Batch mode enabled. Each subfolder uses a fresh API context.")
+                                    folders = list_batch_folders(config.input_dir)
+                                    material_table.rows = [
+                                        {
+                                            "relative_path": folder.name,
+                                            "material_type": "folder",
+                                            "status": f"pending {index}/{len(folders)}",
+                                        }
+                                        for index, folder in enumerate(folders, start=1)
+                                    ]
+                                    material_table.update()
+                                    results = await asyncio.to_thread(generate_batch, config, make_client, log=state.log)
+                                    progress.value = 1.0
+                                    for result in results:
+                                        state.history.insert(
+                                            0,
+                                            {
+                                                "output_dir": str(result.output_dir),
+                                                "html_path": str(result.html_path),
+                                                "zip_path": str(result.zip_path),
+                                            },
+                                        )
+                                    if results:
+                                        state.result_html = results[-1].html_path.read_text(encoding="utf-8")
+                                        preview_frame.set_content(state.result_html)
+                                    history_table.rows = state.history
+                                    history_table.update()
+                                    status_badge.text = "Done"
+                                    status_badge.props("color=green")
+                                    ui.notify(f"批量生成完成：{len(results)} 个子文件夹。", color="positive")
+                                    return
+
+                                client = make_client()
                                 state.log("Scanning materials.")
                                 docs = await asyncio.to_thread(scan_materials, config.input_dir)
                                 progress.value = 0.2

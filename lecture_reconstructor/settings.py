@@ -22,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_tokens": 180000,
     "stream": False,
     "enable_vision_ocr": True,
+    "batch_mode": False,
     "remember_api_key": False,
 }
 
