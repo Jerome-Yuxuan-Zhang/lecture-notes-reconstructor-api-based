@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import tempfile
 from pathlib import Path
 from typing import Protocol
@@ -23,6 +24,7 @@ SUPPORTED_EXTENSIONS = {
 }
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+GENERATED_OUTPUT_DIR = re.compile(r"^\d{8}_\d{6}_.+")
 
 
 class VisionClient(Protocol):
@@ -37,6 +39,9 @@ def scan_materials(input_dir: Path) -> list[MaterialDocument]:
 
     documents: list[MaterialDocument] = []
     for file_path in sorted(p for p in root.rglob("*") if p.is_file()):
+        relative_parts = file_path.relative_to(root).parts
+        if any(GENERATED_OUTPUT_DIR.match(part) for part in relative_parts):
+            continue
         ext = file_path.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
             continue

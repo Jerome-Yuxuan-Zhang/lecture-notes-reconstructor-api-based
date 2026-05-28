@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
-from lecture_reconstructor.generator import generate_lecture
+from lecture_reconstructor.generator import _sanitize_currency_symbols, generate_lecture
 from lecture_reconstructor.html_assets import LECTURE_CSS
 from lecture_reconstructor.models import GenerationConfig, MaterialDocument
 from lecture_reconstructor.providers import get_provider
@@ -25,12 +25,50 @@ class DummyChatClient:
                 "figure_scripts": [
                     {
                         "path": "chapter_1/fig_1_1_test.py",
-                        "code": "import seaborn as sns\nprint('figure script')",
+                        "code": "from pathlib import Path\nPath('assets/fig_1_1_test.png').write_text('ok', encoding='utf-8')",
                     }
                 ],
             },
             ensure_ascii=False,
         )
+
+
+class MarkerChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return "Outline: Chapter 1 Test"
+        return """<<<LECTURE_HTML>>>
+<h1>Glossary</h1><p><img src="assets/fig_1_1_marker.png" alt="marker"></p>
+<<<END_LECTURE_HTML>>>
+
+<<<SELF_CHECK>>>
+# self check
+<<<END_SELF_CHECK>>>
+
+<<<FIGURE_SCRIPT:chapter_1/fig_1_1_marker.py>>>
+from pathlib import Path
+Path('assets/fig_1_1_marker.png').write_text('ok', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
+class MissingAssetChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return "Outline: Chapter 1 Test"
+        return """<<<LECTURE_HTML>>>
+<h1>Glossary</h1><p><img src="assets/missing.png" alt="missing"></p>
+<<<END_LECTURE_HTML>>>
+<<<SELF_CHECK>>>
+# self check
+<<<END_SELF_CHECK>>>"""
 
 
 def _config(tmp_path: Path) -> GenerationConfig:
@@ -67,6 +105,7 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
     scripts_dir = result.output_dir / "script4course"
     assert (scripts_dir / "README.md").exists()
     assert (scripts_dir / "chapter_1" / "fig_1_1_test.py").exists()
+    assert (result.output_dir / "assets" / "fig_1_1_test.png").exists()
 
     html = result.html_path.read_text(encoding="utf-8")
     assert "MathJax" in html
@@ -100,3 +139,53 @@ def test_output_directory_names_are_unique(tmp_path: Path) -> None:
     assert first.output_dir != second.output_dir
     assert first.output_dir.exists()
     assert second.output_dir.exists()
+
+
+def test_marker_response_writes_and_runs_figure_scripts(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+
+    result = generate_lecture(docs, _config(tmp_path), MarkerChatClient())
+
+    assert (result.output_dir / "assets" / "fig_1_1_marker.png").exists()
+    assert (result.output_dir / "script4course" / "chapter_1" / "fig_1_1_marker.py").exists()
+    assert result.errors == []
+
+
+def test_missing_referenced_assets_are_reported(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+
+    result = generate_lecture(docs, _config(tmp_path), MissingAssetChatClient())
+
+    assert "Referenced asset was not generated: assets/missing.png" in result.errors
+
+
+def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
+    text = "S = \\$1.50/€ and spot is $1.20/€ with $300,000 or €750,000."
+
+    sanitized = _sanitize_currency_symbols(text)
+
+    assert "S = \\text{\\$}1.50/\\text{EUR}" in sanitized
+    assert "\\(\\text{\\$}1.20/\\text{EUR}\\)" in sanitized
+    assert "\\(\\text{\\$}300,000\\)" in sanitized
+    assert "\\(\\text{EUR}750,000\\)" in sanitized
+    assert "€" not in sanitized

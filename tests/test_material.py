@@ -25,6 +25,8 @@ def test_scan_materials_recurses_and_filters(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("# A", encoding="utf-8")
     (tmp_path / "nested").mkdir()
     (tmp_path / "nested" / "b.txt").write_text("B", encoding="utf-8")
+    (tmp_path / "20260528_153603_lecture").mkdir()
+    (tmp_path / "20260528_153603_lecture" / "self_check.md").write_text("old output", encoding="utf-8")
     (tmp_path / "ignore.exe").write_text("x", encoding="utf-8")
 
     docs = scan_materials(tmp_path)

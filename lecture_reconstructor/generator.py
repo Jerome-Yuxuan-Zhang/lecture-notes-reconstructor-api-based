@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -77,8 +80,13 @@ def generate_lecture(
     )
 
     lecture_html, self_check, figure_scripts = _parse_generation_response(response)
+    lecture_html = _sanitize_currency_symbols(lecture_html)
+    self_check = _sanitize_currency_symbols(self_check)
     lecture_html = ensure_full_html(lecture_html, title=config.project_name)
-    _write_figure_scripts(scripts_dir, figure_scripts)
+    script_paths = _write_figure_scripts(scripts_dir, figure_scripts)
+    script_errors = _run_figure_scripts(script_paths, output_dir)
+    errors.extend(script_errors)
+    errors.extend(_missing_asset_errors(lecture_html, output_dir))
 
     html_path = output_dir / "lecture.html"
     html_path.write_text(lecture_html, encoding="utf-8")
@@ -176,23 +184,40 @@ def _outline_prompt(material_digest: str) -> str:
 
 def _lecture_prompt(material_digest: str) -> str:
     return (
-        "请生成最终交付物。必须只返回一个 JSON 对象，键为 lecture_html、self_check 和 figure_scripts。"
-        "lecture_html 是完整 HTML 文档，self_check 是 HTML 外部的“自检 / 覆盖核对”。"
-        "figure_scripts 是数组；每个元素包含 path 和 code。path 必须是相对路径，例如 chapter_2/fig_2_1_duration_curve.py；"
-        "code 必须是完整可运行 Python 脚本，用 matplotlib + seaborn 生成对应 assets 图片。"
-        "如果本章没有课程内容图表，figure_scripts 返回空数组 []；不要为材料来源分布这类元信息造图。"
+        "请生成最终交付物。为避免 JSON 转义损坏，必须严格按下面的分隔符格式返回，不要包裹 Markdown 代码块，"
+        "不要输出解释文字。\n\n"
+        "<<<LECTURE_HTML>>>\n"
+        "这里放完整 lecture.html 内容\n"
+        "<<<END_LECTURE_HTML>>>\n\n"
+        "<<<SELF_CHECK>>>\n"
+        "这里放 HTML 外部的“自检 / 覆盖核对”Markdown 内容\n"
+        "<<<END_SELF_CHECK>>>\n\n"
+        "如需要课程内容图表，每个图表脚本用一个脚本块。路径必须是相对路径，例如 chapter_8/fig_8_1_forward_payoff.py。"
+        "脚本必须完整可运行，用 matplotlib + seaborn 生成对应 assets 图片。示例：\n"
+        "<<<FIGURE_SCRIPT:chapter_8/fig_8_1_forward_payoff.py>>>\n"
+        "import matplotlib.pyplot as plt\n"
+        "import seaborn as sns\n"
+        "...\n"
+        "plt.savefig('assets/fig_8_1_forward_payoff.png', dpi=200, bbox_inches='tight')\n"
+        "<<<END_FIGURE_SCRIPT>>>\n\n"
+        "如果本章没有课程内容图表，不要写 FIGURE_SCRIPT 块。不要为材料来源分布、文件类型分布等元信息造图；图表只服务课程内容本身。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
-        "不要生成或引用材料来源分布、文件类型分布等元信息条形图；图表只服务课程内容本身。"
-        "公式里所有货币符号必须放进 \\text{}，尤其不要写 S = \\$1.50/€；"
-        "应写 S = \\text{\\$}1.50/\\text{€} 或 S = 1.50\\ \\text{USD}/\\text{EUR}。"
-        "\n\n课程材料如下：\n"
+        "公式里所有货币符号必须放进 \\text{} 并优先改用三字母货币代码；尤其不要写 S = \\$1.50/€，"
+        "也不要写 \\text{€}、\\text{£}、\\text{¥}。应写 S = \\text{\\$}1.50/\\text{EUR} "
+        "或 S = 1.50\\ \\text{USD}/\\text{EUR}。"
+        "涉及 €、£、¥、$ 的金额、汇率、合约规模、计算过程都要做同样处理。\n\n"
+        "课程材料如下：\n"
         f"{material_digest}"
     )
 
 
 def _parse_generation_response(response: str) -> tuple[str, str, list[dict[str, str]]]:
     text = response.strip()
+    marker_result = _parse_marker_response(text)
+    if marker_result is not None:
+        return marker_result
+
     json_text = _extract_json(text)
     if json_text:
         try:
@@ -215,7 +240,36 @@ def _parse_generation_response(response: str) -> tuple[str, str, list[dict[str, 
     return lecture_html, self_check, []
 
 
-def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]]) -> None:
+def _parse_marker_response(text: str) -> tuple[str, str, list[dict[str, str]]] | None:
+    lecture_match = re.search(
+        r"<<<LECTURE_HTML>>>\s*(.*?)\s*<<<END_LECTURE_HTML>>>",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not lecture_match:
+        return None
+
+    self_check_match = re.search(
+        r"<<<SELF_CHECK>>>\s*(.*?)\s*<<<END_SELF_CHECK>>>",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    scripts: list[dict[str, str]] = []
+    for script_match in re.finditer(
+        r"<<<FIGURE_SCRIPT:([^>\r\n]+)>>>\s*(.*?)\s*<<<END_FIGURE_SCRIPT>>>",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        scripts.append({"path": script_match.group(1).strip(), "code": script_match.group(2).strip()})
+
+    return (
+        lecture_match.group(1).strip(),
+        self_check_match.group(1).strip() if self_check_match else "",
+        scripts,
+    )
+
+
+def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]]) -> list[Path]:
     readme = scripts_dir / "README.md"
     readme.write_text(
         "# Figure generation scripts\n\n"
@@ -223,6 +277,7 @@ def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]
         "Scripts should write image files into the sibling `assets/` folder using relative paths.\n",
         encoding="utf-8",
     )
+    script_paths: list[Path] = []
     for index, item in enumerate(figure_scripts, start=1):
         if not isinstance(item, dict):
             continue
@@ -238,6 +293,43 @@ def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]
         script_path = scripts_dir.joinpath(*safe_parts)
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(code + "\n", encoding="utf-8")
+        script_paths.append(script_path)
+    return script_paths
+
+
+def _run_figure_scripts(script_paths: list[Path], output_dir: Path) -> list[str]:
+    errors: list[str] = []
+    if not script_paths:
+        return errors
+    env = os.environ.copy()
+    env.setdefault("MPLBACKEND", "Agg")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    for script_path in script_paths:
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            cwd=output_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            errors.append(
+                f"Figure script failed: {script_path.relative_to(output_dir)}\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+    return errors
+
+
+def _missing_asset_errors(lecture_html: str, output_dir: Path) -> list[str]:
+    errors: list[str] = []
+    refs = sorted(set(re.findall(r"""src=["'](assets/[^"']+)["']""", lecture_html)))
+    for ref in refs:
+        asset_path = output_dir / ref
+        if not asset_path.exists():
+            errors.append(f"Referenced asset was not generated: {ref}")
+    return errors
 
 
 def _extract_json(text: str) -> str | None:
@@ -247,6 +339,37 @@ def _extract_json(text: str) -> str | None:
     if text.startswith("{") and text.endswith("}"):
         return text
     return None
+
+
+def _sanitize_currency_symbols(text: str) -> str:
+    text = re.sub(
+        r"\\\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
+        lambda match: rf"\text{{\$}}{match.group(1)}/\text{{{_currency_code(match.group(3))}}}",
+        text,
+    )
+    text = re.sub(
+        r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
+        lambda match: rf"\(\text{{\$}}{match.group(1)}/\text{{{_currency_code(match.group(3))}}}\)",
+        text,
+    )
+    text = re.sub(
+        r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)",
+        lambda match: rf"\(\text{{\$}}{match.group(1)}\)",
+        text,
+    )
+    text = re.sub(
+        r"(?<!\\)([€¥£])(\d[\d,]*(?:\.\d+)?)",
+        lambda match: rf"\(\text{{{_currency_code(match.group(1))}}}{match.group(2)}\)",
+        text,
+    )
+    for symbol, code in {"€": "EUR", "£": "GBP", "¥": "JPY"}.items():
+        text = text.replace(rf"\text{{{symbol}}}", rf"\text{{{code}}}")
+        text = text.replace(symbol, code)
+    return text
+
+
+def _currency_code(symbol: str) -> str:
+    return {"€": "EUR", "£": "GBP", "¥": "JPY"}.get(symbol, symbol)
 
 
 def _coverage_summary(documents: list[MaterialDocument]) -> dict[str, object]:
