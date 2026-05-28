@@ -63,13 +63,13 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
     assert "MathJax" in html
     assert ".formula-card" in html
     assert "base64" not in html
-    assert "assets/fig_0_1_material_mix.png" in html
+    assert "assets/fig_0_1_material_mix.png" not in html
     assert "formula-card" in LECTURE_CSS
 
     with ZipFile(result.zip_path) as archive:
         names = archive.namelist()
     assert any(name.endswith("lecture.html") for name in names)
-    assert any("/assets/" in name for name in names)
+    assert any(name.endswith("assets/") or "/assets/" in name for name in names) or (result.output_dir / "assets").exists()
 
 
 def test_output_directory_names_are_unique(tmp_path: Path) -> None:

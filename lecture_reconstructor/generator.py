@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .charts import create_material_mix_chart
 from .html_assets import ensure_full_html
 from .models import GenerationConfig, GenerationResult, MaterialDocument
 from .packaging import package_output
@@ -49,10 +48,6 @@ def generate_lecture(
         encoding="utf-8",
     )
 
-    chart_path = create_material_mix_chart(documents, assets_dir)
-    if chart_path:
-        _log(log, f"Created chart asset: {chart_path.name}")
-
     material_digest = _build_material_digest(documents)
     prompt = prompt_template or _load_prompt_template()
 
@@ -72,7 +67,7 @@ def generate_lecture(
         [
             {"role": "system", "content": prompt},
             {"role": "assistant", "content": f"结构草案如下：\n{outline}"},
-            {"role": "user", "content": _lecture_prompt(material_digest, chart_path)},
+            {"role": "user", "content": _lecture_prompt(material_digest)},
         ],
         temperature=config.temperature,
         max_tokens=config.max_tokens,
@@ -81,11 +76,6 @@ def generate_lecture(
 
     lecture_html, self_check = _parse_generation_response(response)
     lecture_html = ensure_full_html(lecture_html, title=config.project_name)
-    if chart_path and "fig_0_1_material_mix.png" not in lecture_html:
-        lecture_html = lecture_html.replace(
-            "</main>",
-            '<figure><img src="assets/fig_0_1_material_mix.png" alt="Material type coverage"></figure>\n</main>',
-        )
 
     html_path = output_dir / "lecture.html"
     html_path.write_text(lecture_html, encoding="utf-8")
@@ -177,19 +167,15 @@ def _outline_prompt(material_digest: str) -> str:
     )
 
 
-def _lecture_prompt(material_digest: str, chart_path: Path | None) -> str:
-    chart_hint = ""
-    if chart_path:
-        chart_hint = (
-            "\n程序已经生成材料类型覆盖图：assets/fig_0_1_material_mix.png。"
-            "如有合适位置，可在 HTML 中用相对路径引用。"
-        )
+def _lecture_prompt(material_digest: str) -> str:
     return (
         "请生成最终交付物。必须只返回一个 JSON 对象，键为 lecture_html 和 self_check。"
         "lecture_html 是完整 HTML 文档，self_check 是 HTML 外部的“自检 / 覆盖核对”。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
-        f"{chart_hint}\n\n课程材料如下：\n{material_digest}"
+        "不要生成或引用材料来源分布、文件类型分布等元信息条形图；图表只服务课程内容本身。"
+        "\n\n课程材料如下：\n"
+        f"{material_digest}"
     )
 
 

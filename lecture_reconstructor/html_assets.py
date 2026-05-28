@@ -10,6 +10,7 @@ LECTURE_CSS = """
 }
 body {
   margin: 0;
+  font-size: 12pt;
   line-height: 1.8;
   font-family: inherit;
 }
@@ -20,6 +21,30 @@ main {
 }
 h1, h2, h3, h4, table, figcaption, .formula-card {
   font-family: inherit;
+}
+h1 {
+  font-size: 12pt;
+  font-weight: 700;
+  border-bottom: 1px solid #999999;
+  padding-bottom: 8pt;
+  margin-top: 24pt;
+}
+h2, h3, h4 {
+  font-size: 12pt;
+  font-weight: 700;
+}
+hr.chapter-separator {
+  border: 0;
+  border-top: 1px solid #999999;
+  margin: 24pt 0;
+}
+.highlight, mark {
+  background: #fff3b0;
+  color: inherit;
+  padding: 0 2px;
+}
+strong, b {
+  color: inherit;
 }
 p {
   margin-top: 10pt;
@@ -102,7 +127,9 @@ MATHJAX_SCRIPT = """
 <script>
 window.MathJax = {
   tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']], displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] },
-  svg: { fontCache: 'global' }
+  svg: { fontCache: 'global', scale: 1 },
+  chtml: { scale: 1 },
+  options: { renderActions: { addMenu: [] } }
 };
 </script>
 <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
