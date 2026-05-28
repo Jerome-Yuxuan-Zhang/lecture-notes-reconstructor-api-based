@@ -77,6 +77,25 @@ def initial_settings() -> dict[str, Any]:
     return settings
 
 
+def pick_directory(initial_dir: str | None = None) -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    selected = filedialog.askdirectory(initialdir=initial_dir or str(ROOT), title="选择文件夹")
+    root.destroy()
+    return selected
+
+
+async def browse_directory(target_input: Any) -> None:
+    selected = await asyncio.to_thread(pick_directory, target_input.value or str(ROOT))
+    if selected:
+        target_input.value = selected
+        target_input.update()
+
+
 @ui.page("/")
 def main_page() -> None:
     ui.add_head_html(
@@ -133,8 +152,12 @@ def main_page() -> None:
                     with ui.card().classes("workspace-card w-full p-5"):
                         ui.label("任务配置").classes("text-xl font-semibold")
                         with ui.grid(columns=2).classes("w-full gap-4"):
-                            input_dir = ui.input("输入材料文件夹", value=settings["input_dir"]).props("outlined clearable")
-                            output_root = ui.input("输出根目录", value=settings["output_root"]).props("outlined clearable")
+                            with ui.row().classes("w-full items-end gap-2"):
+                                input_dir = ui.input("输入材料文件夹", value=settings["input_dir"]).props("outlined clearable").classes("flex-1")
+                                ui.button("浏览", icon="folder_open", on_click=lambda: asyncio.create_task(browse_directory(input_dir))).props("outline")
+                            with ui.row().classes("w-full items-end gap-2"):
+                                output_root = ui.input("输出根目录", value=settings["output_root"]).props("outlined clearable").classes("flex-1")
+                                ui.button("浏览", icon="folder_open", on_click=lambda: asyncio.create_task(browse_directory(output_root))).props("outline")
                             project_name = ui.input("项目名", value=settings["project_name"]).props("outlined clearable")
                             provider_select = ui.select(
                                 list(provider_catalog.keys()),
