@@ -39,7 +39,9 @@ def generate_lecture(
     _log(log, "Creating output package folder.")
     output_dir = _create_output_dir(config.output_root, config.project_name)
     assets_dir = output_dir / "assets"
+    scripts_dir = output_dir / f"script4{_safe_name(config.project_name)}"
     assets_dir.mkdir(parents=True, exist_ok=True)
+    scripts_dir.mkdir(parents=True, exist_ok=True)
 
     _log(log, "Writing source index.")
     source_index = [doc.to_dict() for doc in documents]
@@ -74,8 +76,9 @@ def generate_lecture(
         stream=config.stream,
     )
 
-    lecture_html, self_check = _parse_generation_response(response)
+    lecture_html, self_check, figure_scripts = _parse_generation_response(response)
     lecture_html = ensure_full_html(lecture_html, title=config.project_name)
+    _write_figure_scripts(scripts_dir, figure_scripts)
 
     html_path = output_dir / "lecture.html"
     html_path.write_text(lecture_html, encoding="utf-8")
@@ -113,7 +116,7 @@ def generate_lecture(
 def _create_output_dir(output_root: Path, project_name: str) -> Path:
     output_root = Path(output_root).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    safe_project = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", project_name).strip("_") or "lecture"
+    safe_project = _safe_name(project_name)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     candidate = output_root / f"{stamp}_{safe_project}"
     suffix = 1
@@ -122,6 +125,10 @@ def _create_output_dir(output_root: Path, project_name: str) -> Path:
         suffix += 1
     candidate.mkdir(parents=True)
     return candidate
+
+
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", value).strip("_") or "lecture"
 
 
 def _load_prompt_template() -> str:
@@ -169,8 +176,11 @@ def _outline_prompt(material_digest: str) -> str:
 
 def _lecture_prompt(material_digest: str) -> str:
     return (
-        "请生成最终交付物。必须只返回一个 JSON 对象，键为 lecture_html 和 self_check。"
+        "请生成最终交付物。必须只返回一个 JSON 对象，键为 lecture_html、self_check 和 figure_scripts。"
         "lecture_html 是完整 HTML 文档，self_check 是 HTML 外部的“自检 / 覆盖核对”。"
+        "figure_scripts 是数组；每个元素包含 path 和 code。path 必须是相对路径，例如 chapter_2/fig_2_1_duration_curve.py；"
+        "code 必须是完整可运行 Python 脚本，用 matplotlib + seaborn 生成对应 assets 图片。"
+        "如果本章没有课程内容图表，figure_scripts 返回空数组 []；不要为材料来源分布这类元信息造图。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
         "不要生成或引用材料来源分布、文件类型分布等元信息条形图；图表只服务课程内容本身。"
@@ -181,13 +191,16 @@ def _lecture_prompt(material_digest: str) -> str:
     )
 
 
-def _parse_generation_response(response: str) -> tuple[str, str]:
+def _parse_generation_response(response: str) -> tuple[str, str, list[dict[str, str]]]:
     text = response.strip()
     json_text = _extract_json(text)
     if json_text:
         try:
             data = json.loads(json_text)
-            return str(data.get("lecture_html", "")), str(data.get("self_check", ""))
+            scripts = data.get("figure_scripts", [])
+            if not isinstance(scripts, list):
+                scripts = []
+            return str(data.get("lecture_html", "")), str(data.get("self_check", "")), scripts
         except json.JSONDecodeError:
             pass
 
@@ -199,7 +212,32 @@ def _parse_generation_response(response: str) -> tuple[str, str]:
         tail_index = lecture_html.lower().rfind("</html>") + len("</html>")
         self_check = lecture_html[tail_index:].strip()
         lecture_html = lecture_html[:tail_index]
-    return lecture_html, self_check
+    return lecture_html, self_check, []
+
+
+def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]]) -> None:
+    readme = scripts_dir / "README.md"
+    readme.write_text(
+        "# Figure generation scripts\n\n"
+        "This folder stores Python scripts used to regenerate figures referenced by the lecture HTML.\n"
+        "Scripts should write image files into the sibling `assets/` folder using relative paths.\n",
+        encoding="utf-8",
+    )
+    for index, item in enumerate(figure_scripts, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("path") or f"fig_script_{index}.py")
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        safe_parts = [_safe_name(part) for part in Path(raw_path).parts if part not in {"", ".", ".."}]
+        if not safe_parts:
+            safe_parts = [f"fig_script_{index}.py"]
+        if not safe_parts[-1].endswith(".py"):
+            safe_parts[-1] = f"{safe_parts[-1]}.py"
+        script_path = scripts_dir.joinpath(*safe_parts)
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(code + "\n", encoding="utf-8")
 
 
 def _extract_json(text: str) -> str | None:

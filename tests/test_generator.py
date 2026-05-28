@@ -17,11 +17,17 @@ class DummyChatClient:
     def chat(self, messages: list[dict], **kwargs: object) -> str:
         self.calls += 1
         if self.calls == 1:
-            return "大纲：第一章 测试 ★★★"
+            return "Outline: Chapter 1 Test"
         return json.dumps(
             {
-                "lecture_html": "<h1>术语表 / Glossary</h1><div class='formula-card'><div class='formula-body'>$$x^{2}$$</div></div>",
-                "self_check": "# 自检 / 覆盖核对\n\n| 页码/文件 | 所属模块 | 主要知识点 | 讲义对应位置 | 图表或例题是否已重构 | 覆盖状态 |\n| --- | --- | --- | --- | --- | --- |",
+                "lecture_html": "<h1>Glossary</h1><div class='formula-card'><div class='formula-body'>$$x^{2}$$</div></div>",
+                "self_check": "# self check",
+                "figure_scripts": [
+                    {
+                        "path": "chapter_1/fig_1_1_test.py",
+                        "code": "import seaborn as sns\nprint('figure script')",
+                    }
+                ],
             },
             ensure_ascii=False,
         )
@@ -33,19 +39,19 @@ def _config(tmp_path: Path) -> GenerationConfig:
         output_root=tmp_path / "outputs",
         provider=get_provider("Qwen"),
         api_key="test",
-        project_name="课程 A",
+        project_name="course",
     )
 
 
 def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
     doc_path = tmp_path / "note.md"
-    doc_path.write_text("概念 A", encoding="utf-8")
+    doc_path.write_text("Concept A", encoding="utf-8")
     docs = [
         MaterialDocument(
             source_path=doc_path,
             relative_path="note.md",
             material_type="md",
-            text="概念 A",
+            text="Concept A",
             status="extracted",
         )
     ]
@@ -58,6 +64,9 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
     assert (result.output_dir / "self_check.md").exists()
     assert (result.output_dir / "manifest.json").exists()
     assert (result.output_dir / "source_index.json").exists()
+    scripts_dir = result.output_dir / "script4course"
+    assert (scripts_dir / "README.md").exists()
+    assert (scripts_dir / "chapter_1" / "fig_1_1_test.py").exists()
 
     html = result.html_path.read_text(encoding="utf-8")
     assert "MathJax" in html
@@ -69,18 +78,18 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
     with ZipFile(result.zip_path) as archive:
         names = archive.namelist()
     assert any(name.endswith("lecture.html") for name in names)
-    assert any(name.endswith("assets/") or "/assets/" in name for name in names) or (result.output_dir / "assets").exists()
+    assert any("script4course/" in name for name in names)
 
 
 def test_output_directory_names_are_unique(tmp_path: Path) -> None:
     doc_path = tmp_path / "note.md"
-    doc_path.write_text("概念 A", encoding="utf-8")
+    doc_path.write_text("Concept A", encoding="utf-8")
     docs = [
         MaterialDocument(
             source_path=doc_path,
             relative_path="note.md",
             material_type="md",
-            text="概念 A",
+            text="Concept A",
             status="extracted",
         )
     ]

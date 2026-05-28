@@ -4,6 +4,7 @@
 
 - `lecture.html`
 - `assets/` 图表文件夹
+- `script4.../` 图表生成脚本文件夹
 - `self_check.md` 覆盖核对
 - `manifest.json`
 - `source_index.json`
