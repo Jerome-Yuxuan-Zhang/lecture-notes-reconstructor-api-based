@@ -17,7 +17,7 @@ body {
 main {
   max-width: 980px;
   margin: 0 auto;
-  padding: 32px 42px 64px;
+  padding: 2.54cm;
 }
 h1, h2, h3, h4, table, figcaption, .formula-card {
   font-family: inherit;
@@ -109,6 +109,9 @@ th, td {
   border: 1px solid #d8d8d8;
   padding: 7px 9px;
   vertical-align: top;
+}
+@page {
+  margin: 2.54cm;
 }
 @media print {
   main {
