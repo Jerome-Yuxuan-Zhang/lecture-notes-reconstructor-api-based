@@ -135,7 +135,21 @@ def _create_output_dir(output_root: Path, project_name: str) -> Path:
 
 
 def _load_prompt_template() -> str:
-    template = Path(__file__).resolve().parent.parent / "templates" / "lecture_prompt.md"
+    root = Path(__file__).resolve().parent.parent
+    agents = root / "AGENTS.md"
+    if agents.exists():
+        prompt = agents.read_text(encoding="utf-8")
+        vocab = root / "vocab_5500.txt"
+        if vocab.exists():
+            prompt += (
+                "\n\n---\n\n"
+                "## 考研英语二 5500 词注释辅助\n\n"
+                "项目根目录存在 `vocab_5500.txt`。生成讲义时，英文注释规则以 `AGENTS.md` 为准："
+                "5500 大纲词之外的英文词汇需要补中文注释。该词表作为常用词白名单使用，"
+                "不要把词表全文输出到讲义正文。\n"
+            )
+        return prompt
+    template = root / "templates" / "lecture_prompt.md"
     if template.exists():
         return template.read_text(encoding="utf-8")
     return "你是讲义重构助手。生成完整中文 HTML 讲义和 HTML 外部自检。"

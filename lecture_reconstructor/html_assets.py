@@ -10,7 +10,7 @@ LECTURE_CSS = """
 }
 body {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.8;
   font-family: inherit;
 }
 main {
@@ -22,12 +22,12 @@ h1, h2, h3, h4, table, figcaption, .formula-card {
   font-family: inherit;
 }
 p {
-  margin-top: 3pt;
-  margin-bottom: 3pt;
+  margin-top: 10pt;
+  margin-bottom: 10pt;
   text-indent: 2em;
 }
 li {
-  margin-top: 2pt;
+  margin-top: 4pt;
   margin-bottom: 2pt;
 }
 li p {
@@ -66,8 +66,14 @@ figure {
   margin: 18px 0;
 }
 img {
+  display: block;
+  width: 70%;
   max-width: 100%;
   height: auto;
+  margin: 0 auto;
+}
+img.wide, figure.wide img {
+  width: 100%;
 }
 table {
   width: 100%;

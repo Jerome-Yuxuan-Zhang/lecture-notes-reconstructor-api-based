@@ -42,12 +42,13 @@
 
 ## 英文注释规则
 
-**注释收窄,只打在专有名词和关键术语上**,不是所有可翻译的词都加英文。具体范围:
+**注释打在专有名词和关键术语上**,不是所有可翻译的词都加英文。具体范围:
 
 - **专有名词**:人名、机构名、工具名、模型名、定理名。
 - **关键术语**:本门课的核心概念、考试会考到识别的术语、行业标准名词。
 - **考试常见英文短语**:ceteris paribus、in equilibrium、at the margin、all else equal 这类直接保留英文括注中文。
 - **公式符号缩写**:首次出现给全称,如 $\text{YTM}$ — yield to maturity,$\text{NPV}$ — net present value。
+- **以上规则外，考研英语二的5500大纲词【vocab_5500.txt】之外的所有词汇都需要打注释。**
 
 **普通名词、描述性动词、形容词不加英文**。"重要意义"、"显著影响"、"稳定增长"这类不是术语,不加英文反而读得顺。
 
@@ -72,6 +73,8 @@
 ## 写一节
 
 路径:**这节解决什么问题 → 概念定义(含英文注)→ 直白解释(数字 / 类比 / 大白话至少一种)→ 形式化(公式或规则)→ 与最易混邻居的对照 → 使用场景或考试形态**。第一步"问题"和第三步"直白解释"不能省。
+
+**!!以上路径标签非必需原词摘录，以结构清晰为宜。**
 
 **重要等级标识**。章标题和每个二级标题(X.X)都带星级:
 
@@ -166,11 +169,11 @@
 - **例题** `#2e7d5b` 绿
 - **警示 / 易错** `#c77a1c` 橙
 
-**行距 `line-height: 1.5`**。
+**行距 `line-height: 1.8`**。
 
 **中文正文自然段**(不使用项目符号)**首行缩进 `text-indent: 2em`**。项目符号内部段落不缩进。
 
-**段前段后** `margin-top: 3pt; margin-bottom: 3pt`。**项目符号行间** `margin-top: 2pt; margin-bottom: 2pt`。
+**段前段后** `margin-top: 10pt; margin-bottom: 10pt`。**项目符号行间** `margin-top: 4pt; margin-bottom: 2pt`。
 
 **字体全部衬线**。正文、标题、数学、图表文字一致走衬线栈,不出现 sans-serif。CSS 栈以 `"Palatino Linotype", "Book Antiqua", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif` 为中心。
 
@@ -186,7 +189,8 @@ CDN 加载 MathJax 渲染 LaTeX。`@media print` 保证打印清晰。禁用浮�
 
 ```
 输出包结构:
-├── lecture.html
+├── course_module/chapter X.X/X.html
+├── script4course_module/chapter X.X/X.py
 └── assets/
     ├── fig_2_1_duration_curve.png
     ├── fig_2_2_yield_spread.png
@@ -216,6 +220,8 @@ sns.set_style('white')   # 默认白底,不带网格
 **拓扑图与关系图**避免拥挤重叠。手段:按结构选布局——树状 `graphviz_layout(prog='dot')`、聚类 `spring_layout` 调大 `k`、环状 `circular_layout`、分层 `multipartite_layout`;**抓主轴**——有主干沿主干拉直,次要节点放两侧;节点太挤就放大 `figsize`,不在小画布硬塞;标签用 `adjustText` 或手动偏移避让。
 
 图嵌入 HTML 保持屏幕和打印可读尺寸,标签、图例、坐标轴清晰,不做小缩略图。
+
+默认图宽度70%。如果是比较宽的图（宽高比大于4:3）或者数据很多，宽度100%。
 
 导出用 `plt.savefig(path, dpi=200, bbox_inches='tight')`,保证打印清晰。
 
