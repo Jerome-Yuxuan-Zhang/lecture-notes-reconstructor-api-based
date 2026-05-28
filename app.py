@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from html import escape
 import os
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,17 @@ def initial_settings() -> dict[str, Any]:
     settings["custom_providers"] = settings.get("custom_providers") or {}
     settings["batch_mode"] = bool(settings.get("batch_mode", False))
     return settings
+
+
+def preview_iframe_html(document_html: str) -> str:
+    srcdoc = escape(document_html, quote=True)
+    return (
+        '<iframe '
+        f'srcdoc="{srcdoc}" '
+        'style="width:100%; min-height:720px; border:0; background:white;" '
+        'sandbox="allow-scripts allow-same-origin">'
+        "</iframe>"
+    )
 
 
 def pick_directory(initial_dir: str | None = None) -> str:
@@ -436,7 +448,7 @@ def main_page() -> None:
                                         )
                                     if results:
                                         state.result_html = results[-1].html_path.read_text(encoding="utf-8")
-                                        preview_frame.set_content(state.result_html)
+                                        preview_frame.set_content(preview_iframe_html(state.result_html))
                                     history_table.rows = state.history
                                     history_table.update()
                                     status_badge.text = "Done"
@@ -472,7 +484,7 @@ def main_page() -> None:
                                 )
                                 history_table.rows = state.history
                                 history_table.update()
-                                preview_frame.set_content(state.result_html)
+                                preview_frame.set_content(preview_iframe_html(state.result_html))
                                 status_badge.text = "Done"
                                 status_badge.props("color=green")
                                 ui.notify(f"生成完成：{result.output_dir}", color="positive")
