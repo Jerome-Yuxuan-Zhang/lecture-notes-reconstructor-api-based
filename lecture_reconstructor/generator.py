@@ -160,7 +160,7 @@ def _load_prompt_template() -> str:
     return "你是讲义重构助手。生成完整中文 HTML 讲义和 HTML 外部自检。"
 
 
-def _build_material_digest(documents: list[MaterialDocument], limit_per_doc: int = 8000) -> str:
+def _build_material_digest(documents: list[MaterialDocument], limit_per_doc: int = 80000) -> str:
     blocks: list[str] = []
     for index, doc in enumerate(documents, start=1):
         text = doc.text.strip() or "[无可抽取文字]"

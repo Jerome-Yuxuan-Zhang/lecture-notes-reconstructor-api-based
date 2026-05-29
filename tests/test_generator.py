@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
-from lecture_reconstructor.generator import _sanitize_currency_symbols, generate_lecture
+from lecture_reconstructor.generator import _build_material_digest, _sanitize_currency_symbols, generate_lecture
 from lecture_reconstructor.html_assets import LECTURE_CSS, ensure_full_html
 from lecture_reconstructor.models import GenerationConfig, MaterialDocument
 from lecture_reconstructor.providers import get_provider
@@ -145,6 +145,26 @@ def test_output_directory_names_are_unique(tmp_path: Path) -> None:
     assert first.output_dir != second.output_dir
     assert first.output_dir.exists()
     assert second.output_dir.exists()
+
+
+def test_material_digest_keeps_up_to_80k_chars_by_default(tmp_path: Path) -> None:
+    doc_path = tmp_path / "long.md"
+    text = "A" * 79000 + "CHAPTER10_MARKER"
+    doc_path.write_text(text, encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="long.md",
+            material_type="md",
+            text=text,
+            status="extracted",
+        )
+    ]
+
+    digest = _build_material_digest(docs)
+
+    assert "CHAPTER10_MARKER" in digest
+    assert "已截断" not in digest
 
 
 def test_marker_response_writes_and_runs_figure_scripts(tmp_path: Path) -> None:
