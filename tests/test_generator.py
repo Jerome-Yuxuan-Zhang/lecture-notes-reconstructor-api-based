@@ -5,7 +5,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from lecture_reconstructor.generator import _sanitize_currency_symbols, generate_lecture
-from lecture_reconstructor.html_assets import LECTURE_CSS
+from lecture_reconstructor.html_assets import LECTURE_CSS, ensure_full_html
 from lecture_reconstructor.models import GenerationConfig, MaterialDocument
 from lecture_reconstructor.providers import get_provider
 
@@ -109,6 +109,12 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
 
     html = result.html_path.read_text(encoding="utf-8")
     assert "MathJax" in html
+    assert "tex-chtml.js" in html
+    assert "tex-svg.js" not in html
+    assert "inlineMath: [['\\\\(', '\\\\)']]" in html
+    assert "['$', '$']" not in html
+    assert "[tex]/unicode" in html
+    assert "pounds: ['\\\\unicode{x00A3}', 0]" in html
     assert ".formula-card" in html
     assert "base64" not in html
     assert "assets/fig_0_1_material_mix.png" not in html
@@ -195,3 +201,27 @@ def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
     assert "\\(1.50\\,\\mathrm{USD/EUR}\\)" in sanitized
     assert "€" not in sanitized
     assert "\\text{\\$}" not in sanitized
+
+
+def test_ensure_full_html_replaces_unsafe_mathjax_config() -> None:
+    html = """<!doctype html>
+<html>
+<head>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']] }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+</head>
+<body><p>Cost is $100.</p></body>
+</html>"""
+
+    normalized = ensure_full_html(html)
+
+    assert "tex-chtml.js" in normalized
+    assert "tex-svg.js" not in normalized
+    assert "['$', '$']" not in normalized
+    assert "inlineMath: [['\\\\(', '\\\\)']]" in normalized
+    assert "[tex]/unicode" in normalized
+    assert "bitcoin: ['\\\\unicode{x20BF}', 0]" in normalized

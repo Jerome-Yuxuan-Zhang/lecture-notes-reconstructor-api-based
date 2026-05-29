@@ -110,12 +110,11 @@
 
 所有数学用 LaTeX,**杜绝 `Math input error`**。逐条自检:
 
+- **MathJax v3 配置固定**:HTML 必须从 CDN 加载 `tex-chtml.js`;配置 `<script>` 必须放在 MathJax loader `<script>` 之前。只启用 `\(...\)` 作为行内数学、`\[...\]` 作为显示数学,**绝不启用 `$...$` 或 `$$...$$` 分隔符**,因为正文会出现货币金额。加载 `[tex]/unicode` 扩展,并在 `tex.macros` 中用 `\unicode{}` 定义货币宏:`\pounds`=U+00A3、`\euro`=U+20AC、`\rupee`=U+20B9、`\won`=U+20A9、`\ruble`=U+20BD、`\bitcoin`=U+20BF。`\$` 与 `\yen` 是 MathJax 原生支持,不要重定义。
+- **行内与显示**分清:变量用 `\(...\)`,独立公式用 `\[...\]` 单独成段。不要使用 `$...$`、`$$...$$`。
 - **上下标**含多字符必加花括号:$e^{rt}$ 而非 $e^rt$。
 - **乘号**用 `\cdot` 或 `\times`,不用裸 `*`。
 - **货币符号**与 `$` 分隔符冲突:所有关乎货币单位或货币符号的内容,在公式里一律写成 `\mathrm{CURRENCY}` 形式。不得在公式中直接写 `$`、`€`、`¥`、`£` 等符号,也不要写 `\text{\$}`、`\text{$}`、`\text{€}`、`\text{£}`、`\text{¥}` 这类容易触发 MathJax 解析或字体兼容问题的形式。美元写 `\mathrm{USD}`;欧元写 `\mathrm{EUR}`;英镑写 `\mathrm{GBP}`;日元写 `\mathrm{JPY}`。正文可写"100 美元";一旦进入 LaTeX 公式,必须写 `100\,\mathrm{USD}`。汇率写成 `S = 1.50\,\mathrm{USD/EUR}` 或 `S = 1.50\,\mathrm{USD}/\mathrm{EUR}`。
-
-
-- **行内与显示**分清:变量 `$...$`,独立公式 `$$...$$` 单独成段。
 - **中文括号不入公式**:公式内统一 `()` `[]` `\{\}`。
 
 推导一步不省。显而易见的代数化简也要写——学生的"显而易见"与你的不同。
@@ -126,14 +125,14 @@
 <div class="formula-card">
   <div class="mm-badge">★ 必背公式</div>
   <div class="formula-body">
-    $$D = \frac{\sum_{t=1}^{T} t \cdot \frac{C_t}{(1+y)^t}}{P}$$
+    \[D = \frac{\sum_{t=1}^{T} t \cdot \frac{C_t}{(1+y)^t}}{P}\]
   </div>
 </div>
 
 <!-- 非必背公式:去掉 mm-badge,保留红色 bar -->
 <div class="formula-card">
   <div class="formula-body">
-    $$\text{PV} = \frac{C}{1+r}$$
+    \[\text{PV} = \frac{C}{1+r}\]
   </div>
 </div>
 ```

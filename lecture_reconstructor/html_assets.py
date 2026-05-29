@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 LECTURE_CSS = """
 :root {
@@ -129,22 +131,50 @@ th, td {
 MATHJAX_SCRIPT = """
 <script>
 window.MathJax = {
-  tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']], displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] },
-  svg: { fontCache: 'global', scale: 1 },
+  loader: { load: ['[tex]/unicode'] },
+  tex: {
+    packages: { '[+]': ['unicode'] },
+    inlineMath: [['\\\\(', '\\\\)']],
+    displayMath: [['\\\\[', '\\\\]']],
+    processEscapes: true,
+    macros: {
+      pounds: ['\\\\unicode{x00A3}', 0],
+      euro: ['\\\\unicode{x20AC}', 0],
+      rupee: ['\\\\unicode{x20B9}', 0],
+      won: ['\\\\unicode{x20A9}', 0],
+      ruble: ['\\\\unicode{x20BD}', 0],
+      bitcoin: ['\\\\unicode{x20BF}', 0]
+    }
+  },
   chtml: { scale: 1 },
   options: { renderActions: { addMenu: [] } }
 };
 </script>
-<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 """
+
+
+def _strip_mathjax_scripts(html: str) -> str:
+    html = re.sub(
+        r"<script\b(?=[^>]*\bsrc=[\"'][^\"']*mathjax[^\"']*[\"'])[^>]*>\s*</script>",
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    html = re.sub(
+        r"<script\b[^>]*>\s*(?:window\.)?MathJax\s*=\s*\{.*?\};?\s*</script>",
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return html
 
 
 def ensure_full_html(content: str, title: str = "Lecture Notes") -> str:
     stripped = content.strip()
     if "<html" in stripped.lower() and "</html>" in stripped.lower():
-        html = stripped
-        if "MathJax" not in html:
-            html = html.replace("</head>", f"{MATHJAX_SCRIPT}\n</head>")
+        html = _strip_mathjax_scripts(stripped)
+        html = html.replace("</head>", f"{MATHJAX_SCRIPT}\n</head>")
         if ".formula-card" not in html:
             html = html.replace("</head>", f"<style>{LECTURE_CSS}</style>\n</head>")
         return html

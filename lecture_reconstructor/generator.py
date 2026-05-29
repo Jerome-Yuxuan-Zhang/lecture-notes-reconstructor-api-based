@@ -203,6 +203,8 @@ def _lecture_prompt(material_digest: str) -> str:
         "如果本章没有课程内容图表，不要写 FIGURE_SCRIPT 块。不要为材料来源分布、文件类型分布等元信息造图；图表只服务课程内容本身。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
+        "所有数学只允许使用 \\(...\\) 和 \\[...\\] 分隔符；不要使用 $...$ 或 $$...$$。"
+        "MathJax 必须使用 tex-chtml.js，加载 [tex]/unicode，并定义 \\pounds、\\euro、\\rupee、\\won、\\ruble、\\bitcoin 宏。"
         "公式里所有货币符号必须改用三字母货币代码和 \\mathrm{}；尤其不要写 S = \\$1.50/€，"
         "也不要写 \\text{\\$}、\\text{$}、\\text{€}、\\text{£}、\\text{¥}。"
         "应写 S = 1.50\\,\\mathrm{USD/EUR} 或 S = 1.50\\,\\mathrm{USD}/\\mathrm{EUR}。"
