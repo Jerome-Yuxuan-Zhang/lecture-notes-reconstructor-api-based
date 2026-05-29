@@ -205,9 +205,9 @@ def _lecture_prompt(material_digest: str) -> str:
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
         "所有数学只允许使用 \\(...\\) 和 \\[...\\] 分隔符；不要使用 $...$ 或 $$...$$。"
         "MathJax 必须使用 tex-chtml.js，加载 [tex]/unicode，并定义 \\pounds、\\euro、\\rupee、\\won、\\ruble、\\bitcoin 宏。"
-        "公式里所有货币符号必须改用三字母货币代码和 \\mathrm{}；尤其不要写 S = \\$1.50/€，"
-        "也不要写 \\text{\\$}、\\text{$}、\\text{€}、\\text{£}、\\text{¥}。"
-        "应写 S = 1.50\\,\\mathrm{USD/EUR} 或 S = 1.50\\,\\mathrm{USD}/\\mathrm{EUR}。"
+        "公式里所有货币符号必须使用 MathJax 货币宏；尤其不要写 S = \\$1.50/€，"
+        "也不要写裸 €、£、¥ 或 \\text{\\$}、\\text{$}、\\text{€}、\\text{£}、\\text{¥}。"
+        "应写 S = 1.50\\,\\$/\\euro 或 S = 1.50\\,\\mathrm{USD}/\\euro。"
         "涉及 €、£、¥、$ 的金额、汇率、合约规模、计算过程都要做同样处理。\n\n"
         "课程材料如下：\n"
         f"{material_digest}"
@@ -346,49 +346,63 @@ def _extract_json(text: str) -> str | None:
 def _sanitize_currency_symbols(text: str) -> str:
     text = re.sub(
         r"\$\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)(\s*/\s*)\\text\{(USD|EUR|GBP|JPY)\}\$",
-        lambda match: rf"\({match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}\)",
+        lambda match: rf"\({match.group(1)}\,\$/{_currency_macro(match.group(3))}\)",
         text,
     )
     text = re.sub(
         r"\\\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
-        lambda match: rf"{match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}",
+        lambda match: rf"{match.group(1)}\,\$/{_currency_macro(match.group(3))}",
         text,
     )
     text = re.sub(
         r"\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)(\s*/\s*)\\text\{(USD|EUR|GBP|JPY)\}",
-        lambda match: rf"{match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}",
+        lambda match: rf"{match.group(1)}\,\$/{_currency_macro(match.group(3))}",
         text,
     )
     text = re.sub(
         r"\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)",
-        lambda match: rf"{match.group(1)}\,\mathrm{{USD}}",
+        lambda match: rf"{match.group(1)}\,\$",
         text,
     )
     text = re.sub(
         r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
-        lambda match: rf"\({match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}\)",
+        lambda match: rf"\({match.group(1)}\,\$/{_currency_macro(match.group(3))}\)",
         text,
     )
     text = re.sub(
         r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)",
-        lambda match: rf"\({match.group(1)}\,\mathrm{{USD}}\)",
+        lambda match: rf"\({match.group(1)}\,\$\)",
         text,
     )
     text = re.sub(
         r"(?<!\\)([€¥£])(\d[\d,]*(?:\.\d+)?)",
-        lambda match: rf"\({match.group(2)}\,\mathrm{{{_currency_code(match.group(1))}}}\)",
+        lambda match: rf"\({match.group(2)}\,{_currency_macro(match.group(1))}\)",
         text,
     )
-    for code in ("USD", "EUR", "GBP", "JPY"):
-        text = text.replace(rf"\text{{{code}}}", rf"\mathrm{{{code}}}")
-    for symbol, code in {"€": "EUR", "£": "GBP", "¥": "JPY"}.items():
-        text = text.replace(rf"\text{{{symbol}}}", rf"\mathrm{{{code}}}")
-        text = text.replace(symbol, code)
+    for value, macro in {
+        "EUR": r"\euro",
+        "GBP": r"\pounds",
+        "JPY": r"\yen",
+        "€": r"\euro",
+        "£": r"\pounds",
+        "¥": r"\yen",
+    }.items():
+        text = text.replace(rf"\text{{{value}}}", macro)
+    text = text.replace("€", r"\euro")
+    text = text.replace("£", r"\pounds")
+    text = text.replace("¥", r"\yen")
     return text
 
 
-def _currency_code(symbol: str) -> str:
-    return {"€": "EUR", "£": "GBP", "¥": "JPY"}.get(symbol, symbol)
+def _currency_macro(value: str) -> str:
+    return {
+        "EUR": r"\euro",
+        "GBP": r"\pounds",
+        "JPY": r"\yen",
+        "€": r"\euro",
+        "£": r"\pounds",
+        "¥": r"\yen",
+    }.get(value, value)
 
 
 def _coverage_summary(documents: list[MaterialDocument]) -> dict[str, object]:

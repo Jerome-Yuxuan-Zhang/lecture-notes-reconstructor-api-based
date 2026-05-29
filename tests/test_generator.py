@@ -193,13 +193,14 @@ def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
 
     sanitized = _sanitize_currency_symbols(text)
 
-    assert "S = 1.50\\,\\mathrm{USD/EUR}" in sanitized
-    assert "\\(1.20\\,\\mathrm{USD/EUR}\\)" in sanitized
-    assert "\\(300,000\\,\\mathrm{USD}\\)" in sanitized
-    assert "\\(750,000\\,\\mathrm{EUR}\\)" in sanitized
-    assert "\\(4,545,455\\,\\mathrm{USD}\\)" in sanitized
-    assert "\\(1.50\\,\\mathrm{USD/EUR}\\)" in sanitized
+    assert "S = 1.50\\,\\$/\\euro" in sanitized
+    assert "\\(1.20\\,\\$/\\euro\\)" in sanitized
+    assert "\\(300,000\\,\\$\\)" in sanitized
+    assert "\\(750,000\\,\\euro\\)" in sanitized
+    assert "\\(4,545,455\\,\\$\\)" in sanitized
+    assert "\\(1.50\\,\\$/\\euro\\)" in sanitized
     assert "€" not in sanitized
+    assert "\\mathrm{USD" not in sanitized
     assert "\\text{\\$}" not in sanitized
 
 
