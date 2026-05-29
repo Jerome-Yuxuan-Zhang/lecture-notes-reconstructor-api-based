@@ -203,9 +203,9 @@ def _lecture_prompt(material_digest: str) -> str:
         "如果本章没有课程内容图表，不要写 FIGURE_SCRIPT 块。不要为材料来源分布、文件类型分布等元信息造图；图表只服务课程内容本身。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
-        "公式里所有货币符号必须放进 \\text{} 并优先改用三字母货币代码；尤其不要写 S = \\$1.50/€，"
-        "也不要写 \\text{€}、\\text{£}、\\text{¥}。应写 S = \\text{\\$}1.50/\\text{EUR} "
-        "或 S = 1.50\\ \\text{USD}/\\text{EUR}。"
+        "公式里所有货币符号必须改用三字母货币代码和 \\mathrm{}；尤其不要写 S = \\$1.50/€，"
+        "也不要写 \\text{\\$}、\\text{$}、\\text{€}、\\text{£}、\\text{¥}。"
+        "应写 S = 1.50\\,\\mathrm{USD/EUR} 或 S = 1.50\\,\\mathrm{USD}/\\mathrm{EUR}。"
         "涉及 €、£、¥、$ 的金额、汇率、合约规模、计算过程都要做同样处理。\n\n"
         "课程材料如下：\n"
         f"{material_digest}"
@@ -343,27 +343,44 @@ def _extract_json(text: str) -> str | None:
 
 def _sanitize_currency_symbols(text: str) -> str:
     text = re.sub(
+        r"\$\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)(\s*/\s*)\\text\{(USD|EUR|GBP|JPY)\}\$",
+        lambda match: rf"\({match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}\)",
+        text,
+    )
+    text = re.sub(
         r"\\\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
-        lambda match: rf"\text{{\$}}{match.group(1)}/\text{{{_currency_code(match.group(3))}}}",
+        lambda match: rf"{match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}",
+        text,
+    )
+    text = re.sub(
+        r"\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)(\s*/\s*)\\text\{(USD|EUR|GBP|JPY)\}",
+        lambda match: rf"{match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}",
+        text,
+    )
+    text = re.sub(
+        r"\\text\{(?:\\\$|\$)\}(\d[\d,]*(?:\.\d+)?)",
+        lambda match: rf"{match.group(1)}\,\mathrm{{USD}}",
         text,
     )
     text = re.sub(
         r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)(\s*/\s*)([€¥£])",
-        lambda match: rf"\(\text{{\$}}{match.group(1)}/\text{{{_currency_code(match.group(3))}}}\)",
+        lambda match: rf"\({match.group(1)}\,\mathrm{{USD/{_currency_code(match.group(3))}}}\)",
         text,
     )
     text = re.sub(
         r"(?<!\\)\$(\d[\d,]*(?:\.\d+)?)",
-        lambda match: rf"\(\text{{\$}}{match.group(1)}\)",
+        lambda match: rf"\({match.group(1)}\,\mathrm{{USD}}\)",
         text,
     )
     text = re.sub(
         r"(?<!\\)([€¥£])(\d[\d,]*(?:\.\d+)?)",
-        lambda match: rf"\(\text{{{_currency_code(match.group(1))}}}{match.group(2)}\)",
+        lambda match: rf"\({match.group(2)}\,\mathrm{{{_currency_code(match.group(1))}}}\)",
         text,
     )
+    for code in ("USD", "EUR", "GBP", "JPY"):
+        text = text.replace(rf"\text{{{code}}}", rf"\mathrm{{{code}}}")
     for symbol, code in {"€": "EUR", "£": "GBP", "¥": "JPY"}.items():
-        text = text.replace(rf"\text{{{symbol}}}", rf"\text{{{code}}}")
+        text = text.replace(rf"\text{{{symbol}}}", rf"\mathrm{{{code}}}")
         text = text.replace(symbol, code)
     return text
 

@@ -180,12 +180,18 @@ def test_missing_referenced_assets_are_reported(tmp_path: Path) -> None:
 
 
 def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
-    text = "S = \\$1.50/€ and spot is $1.20/€ with $300,000 or €750,000."
+    text = (
+        "S = \\$1.50/€ and spot is $1.20/€ with $300,000 or €750,000. "
+        "Cost is \\(\\text{\\$}4,545,455\\) and rate is $\\text{\\$}1.50/\\text{EUR}$."
+    )
 
     sanitized = _sanitize_currency_symbols(text)
 
-    assert "S = \\text{\\$}1.50/\\text{EUR}" in sanitized
-    assert "\\(\\text{\\$}1.20/\\text{EUR}\\)" in sanitized
-    assert "\\(\\text{\\$}300,000\\)" in sanitized
-    assert "\\(\\text{EUR}750,000\\)" in sanitized
+    assert "S = 1.50\\,\\mathrm{USD/EUR}" in sanitized
+    assert "\\(1.20\\,\\mathrm{USD/EUR}\\)" in sanitized
+    assert "\\(300,000\\,\\mathrm{USD}\\)" in sanitized
+    assert "\\(750,000\\,\\mathrm{EUR}\\)" in sanitized
+    assert "\\(4,545,455\\,\\mathrm{USD}\\)" in sanitized
+    assert "\\(1.50\\,\\mathrm{USD/EUR}\\)" in sanitized
     assert "€" not in sanitized
+    assert "\\text{\\$}" not in sanitized
