@@ -72,9 +72,38 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-start "" "http://127.0.0.1:8080"
-python app.py
+set "SERVER_CMD=.venv\run_server.cmd"
+(
+  echo @echo off
+  echo chcp 65001 ^>nul
+  echo cd /d "%CD%"
+  echo call ".venv\Scripts\activate.bat"
+  echo python app.py
+) > "%SERVER_CMD%"
+start "Lecture Reconstructor Server" /min "%SERVER_CMD%"
+
+echo Waiting for local server to become ready...
+set "READY=0"
+for /l %%I in (1,1,60) do (
+  powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8080' -TimeoutSec 1; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>nul
+  if not errorlevel 1 (
+    set "READY=1"
+    goto :server_ready
+  )
+  timeout /t 1 /nobreak >nul
+)
+
+:server_ready
+if "%READY%"=="1" (
+  echo App is ready. Opening browser...
+  start "" "http://127.0.0.1:8080"
+  echo.
+  echo The app server is running in a minimized window named "Lecture Reconstructor Server".
+  echo Close that server window when you want to stop the app.
+) else (
+  echo The app did not become ready on port 8080 within 60 seconds.
+  echo Check this window for errors, then run start_app.bat again.
+)
 
 echo.
-echo App stopped.
 pause
