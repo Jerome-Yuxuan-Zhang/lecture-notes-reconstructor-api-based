@@ -64,14 +64,18 @@ def provider_from_catalog(catalog: dict[str, ProviderConfig], name: str) -> Prov
 def initial_settings() -> dict[str, Any]:
     settings = load_settings()
     catalog = load_provider_catalog(settings)
-    provider_name = settings.get("provider") if settings.get("provider") in catalog else "Qwen"
+    provider_name = settings.get("provider") if settings.get("provider") in catalog else "DeepSeek"
+    figure_provider_name = settings.get("figure_provider") if settings.get("figure_provider") in catalog else "Qwen"
     provider = provider_from_catalog(catalog, provider_name)
+    figure_provider = provider_from_catalog(catalog, figure_provider_name)
     settings["provider"] = provider.name
+    settings["figure_provider"] = figure_provider.name
     settings["input_dir"] = settings.get("input_dir") or str(ROOT)
     settings["output_root"] = settings.get("output_root") or str(DEFAULT_OUTPUT_ROOT)
     settings["base_url"] = settings.get("base_url") or provider.base_url
     settings["model"] = settings.get("model") or provider.model
     settings["api_key_env"] = settings.get("api_key_env") or provider.api_key_env
+    settings["figure_api_key_env"] = settings.get("figure_api_key_env") or figure_provider.api_key_env
     settings["max_tokens"] = int(settings.get("max_tokens") or DEFAULT_MAX_TOKENS)
     settings["custom_providers"] = settings.get("custom_providers") or {}
     settings["batch_mode"] = bool(settings.get("batch_mode", False))
@@ -181,6 +185,13 @@ def main_page() -> None:
                             base_url = ui.input("Base URL", value=settings["base_url"]).props("outlined clearable")
                             api_key = ui.input("API Key", password=True, password_toggle_button=True).props("outlined")
                             env_hint = ui.input("环境变量", value=settings["api_key_env"]).props("outlined clearable")
+                            figure_provider_select = ui.select(
+                                list(provider_catalog.keys()),
+                                value=settings["figure_provider"],
+                                label="图表代码 API 提供商",
+                            ).props("outlined")
+                            figure_api_key = ui.input("图表代码 API Key", password=True, password_toggle_button=True).props("outlined")
+                            figure_env_hint = ui.input("图表代码环境变量", value=settings["figure_api_key_env"]).props("outlined clearable")
                             custom_name = ui.input("保存为自定义提供商名称", value="").props("outlined clearable")
                             temperature = ui.number("Temperature", value=settings["temperature"], min=0, max=2, step=0.05).props("outlined")
                             max_tokens = ui.number(
@@ -206,9 +217,11 @@ def main_page() -> None:
                                 "output_root": output_root.value or "",
                                 "project_name": project_name.value or "lecture",
                                 "provider": provider_select.value,
+                                "figure_provider": figure_provider_select.value,
                                 "base_url": base_url.value or "",
                                 "model": model.value or "",
                                 "api_key_env": env_hint.value or "",
+                                "figure_api_key_env": figure_env_hint.value or "",
                                 "custom_providers": {
                                     name: provider.to_dict()
                                     for name, provider in provider_catalog.items()
@@ -224,6 +237,13 @@ def main_page() -> None:
 
                         def resolve_api_key() -> str:
                             return api_key.value or os.getenv(env_hint.value or "", "") or load_api_key(provider_select.value)
+
+                        def resolve_figure_api_key() -> str:
+                            return (
+                                figure_api_key.value
+                                or os.getenv(figure_env_hint.value or "", "")
+                                or load_api_key(figure_provider_select.value)
+                            )
 
                         def refresh_model_options(provider: ProviderConfig) -> None:
                             options = provider.models or [provider.model]
@@ -247,6 +267,15 @@ def main_page() -> None:
                             env_hint.update()
                             api_key.update()
 
+                        def sync_figure_provider(load_saved_key: bool = True) -> None:
+                            provider = provider_from_catalog(provider_catalog, figure_provider_select.value)
+                            figure_env_hint.value = provider.api_key_env
+                            figure_api_key.value = os.getenv(provider.api_key_env, "")
+                            if load_saved_key and not figure_api_key.value:
+                                figure_api_key.value = load_api_key(provider.name)
+                            figure_env_hint.update()
+                            figure_api_key.update()
+
                         def sync_model_from_select() -> None:
                             if model_select.value:
                                 model.value = model_select.value
@@ -268,6 +297,8 @@ def main_page() -> None:
                             provider_select.options = list(provider_catalog.keys())
                             provider_select.value = name
                             provider_select.update()
+                            figure_provider_select.options = list(provider_catalog.keys())
+                            figure_provider_select.update()
                             save_settings(current_settings())
                             ui.notify(f"已保存自定义提供商：{name}", color="positive")
 
@@ -281,6 +312,8 @@ def main_page() -> None:
                             else:
                                 delete_api_key(provider_select.value)
                                 ui.notify(f"配置已保存：{path}", color="positive")
+                            if remember_key.value and figure_api_key.value:
+                                save_api_key(figure_provider_select.value, figure_api_key.value)
 
                         def reload_config() -> None:
                             nonlocal settings, provider_catalog
@@ -291,9 +324,12 @@ def main_page() -> None:
                             project_name.value = settings["project_name"]
                             provider_select.options = list(provider_catalog.keys())
                             provider_select.value = settings["provider"]
+                            figure_provider_select.options = list(provider_catalog.keys())
+                            figure_provider_select.value = settings["figure_provider"]
                             base_url.value = settings["base_url"]
                             model.value = settings["model"]
                             env_hint.value = settings["api_key_env"]
+                            figure_env_hint.value = settings["figure_api_key_env"]
                             temperature.value = settings["temperature"]
                             max_tokens.value = settings["max_tokens"]
                             stream.value = settings["stream"]
@@ -301,16 +337,24 @@ def main_page() -> None:
                             batch_mode.value = settings["batch_mode"]
                             remember_key.value = settings["remember_api_key"]
                             api_key.value = os.getenv(env_hint.value or "", "") or load_api_key(provider_select.value)
+                            figure_api_key.value = os.getenv(figure_env_hint.value or "", "") or load_api_key(
+                                figure_provider_select.value
+                            )
                             refresh_model_options(provider_from_catalog(provider_catalog, provider_select.value))
                             ui.notify("配置已重新加载。", color="positive")
 
                         provider_select.on_value_change(lambda _: sync_provider())
+                        figure_provider_select.on_value_change(lambda _: sync_figure_provider())
                         model_select.on_value_change(lambda _: sync_model_from_select())
                         refresh_model_options(provider_from_catalog(provider_catalog, provider_select.value))
                         if settings["remember_api_key"]:
                             api_key.value = load_api_key(provider_select.value) or os.getenv(env_hint.value or "", "")
+                            figure_api_key.value = load_api_key(figure_provider_select.value) or os.getenv(
+                                figure_env_hint.value or "", ""
+                            )
                         else:
                             api_key.value = os.getenv(env_hint.value or "", "")
+                            figure_api_key.value = os.getenv(figure_env_hint.value or "", "")
 
                         async def test_api() -> None:
                             try:
@@ -407,6 +451,10 @@ def main_page() -> None:
                                 key = resolve_api_key()
                                 if not key:
                                     raise ApiConfigurationError("缺少 API Key，不能生成。")
+                                figure_provider = provider_from_catalog(provider_catalog, figure_provider_select.value)
+                                figure_key = resolve_figure_api_key()
+                                if not figure_key:
+                                    raise ApiConfigurationError("缺少图表代码 API Key，不能生成图表脚本。")
                                 config = GenerationConfig(
                                     input_dir=Path(input_dir.value),
                                     output_root=Path(output_root.value),
@@ -423,6 +471,10 @@ def main_page() -> None:
                                     fresh_provider = ProviderConfig(**provider.to_dict())
                                     return OpenAICompatibleClient(fresh_provider, key)
 
+                                def make_figure_client() -> OpenAICompatibleClient:
+                                    fresh_provider = ProviderConfig(**figure_provider.to_dict())
+                                    return OpenAICompatibleClient(fresh_provider, figure_key)
+
                                 if batch_mode.value:
                                     state.log("Batch mode enabled. Each subfolder uses a fresh API context.")
                                     folders = list_batch_folders(config.input_dir)
@@ -435,7 +487,13 @@ def main_page() -> None:
                                         for index, folder in enumerate(folders, start=1)
                                     ]
                                     material_table.update()
-                                    results = await asyncio.to_thread(generate_batch, config, make_client, log=state.log)
+                                    results = await asyncio.to_thread(
+                                        generate_batch,
+                                        config,
+                                        make_client,
+                                        figure_client_factory=make_figure_client,
+                                        log=state.log,
+                                    )
                                     progress.value = 1.0
                                     for result in results:
                                         state.history.insert(
@@ -471,7 +529,14 @@ def main_page() -> None:
                                 material_table.update()
                                 refresh_logs()
 
-                                result = await asyncio.to_thread(generate_lecture, docs, config, client, log=state.log)
+                                result = await asyncio.to_thread(
+                                    generate_lecture,
+                                    docs,
+                                    config,
+                                    client,
+                                    figure_client=make_figure_client(),
+                                    log=state.log,
+                                )
                                 progress.value = 1.0
                                 state.result_html = result.html_path.read_text(encoding="utf-8")
                                 state.history.insert(

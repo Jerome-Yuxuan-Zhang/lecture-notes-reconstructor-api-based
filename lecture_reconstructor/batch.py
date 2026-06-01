@@ -32,6 +32,7 @@ def generate_batch(
     config: GenerationConfig,
     client_factory: ClientFactory,
     *,
+    figure_client_factory: ClientFactory | None = None,
     log: LogFn | None = None,
 ) -> list[GenerationResult]:
     folders = list_batch_folders(config.input_dir)
@@ -52,7 +53,8 @@ def generate_batch(
         _log(log, f"[{index}/{total}] Extracting text and OCR content.")
         documents = extract_materials(documents, client, module_config)
         _log(log, f"[{index}/{total}] Generating lecture with a fresh API context.")
-        result = generate_lecture(documents, module_config, client, log=log)
+        figure_client = figure_client_factory() if figure_client_factory else None
+        result = generate_lecture(documents, module_config, client, figure_client=figure_client, log=log)
         results.append(result)
         _log(log, f"[{index}/{total}] Finished module: {module_name}")
 

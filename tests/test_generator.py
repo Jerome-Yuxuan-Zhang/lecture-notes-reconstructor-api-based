@@ -71,6 +71,42 @@ class MissingAssetChatClient:
 <<<END_SELF_CHECK>>>"""
 
 
+class MainLectureOnlyClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return "Outline: Chapter 1 Test"
+        return """<<<LECTURE_HTML>>>
+<h1>Glossary</h1>
+<p>Payoff diagrams clarify the hedge.</p>
+<figure>
+  <img src="assets/fig_1_1_payoff.png" alt="payoff">
+  <figcaption>Forward payoff diagram.</figcaption>
+</figure>
+<<<END_LECTURE_HTML>>>
+<<<SELF_CHECK>>>
+# self check
+<<<END_SELF_CHECK>>>"""
+
+
+class FigureScriptClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_prompt = ""
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        self.last_prompt = messages[-1]["content"]
+        return """<<<FIGURE_SCRIPT:chapter_1/fig_1_1_payoff.py>>>
+from pathlib import Path
+Path('assets').mkdir(exist_ok=True)
+Path('assets/fig_1_1_payoff.png').write_text('ok', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
 def _config(tmp_path: Path) -> GenerationConfig:
     return GenerationConfig(
         input_dir=tmp_path,
@@ -203,6 +239,34 @@ def test_missing_referenced_assets_are_reported(tmp_path: Path) -> None:
     result = generate_lecture(docs, _config(tmp_path), MissingAssetChatClient())
 
     assert "Referenced asset was not generated: assets/missing.png" in result.errors
+
+
+def test_two_stage_generation_uses_figure_client_for_scripts(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    main_client = MainLectureOnlyClient()
+    figure_client = FigureScriptClient()
+
+    result = generate_lecture(docs, _config(tmp_path), main_client, figure_client=figure_client)
+
+    assert main_client.calls == 2
+    assert figure_client.calls == 1
+    assert "assets/fig_1_1_payoff.png" in figure_client.last_prompt
+    assert "Forward payoff diagram" in figure_client.last_prompt
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").exists()
+    html = result.html_path.read_text(encoding="utf-8")
+    assert "lecture-module-heading" in html
+    assert "模块：course" in html
+    assert "Module: course" in html
 
 
 def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:

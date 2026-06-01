@@ -35,6 +35,7 @@ def generate_lecture(
     config: GenerationConfig,
     client: ChatClient,
     *,
+    figure_client: ChatClient | None = None,
     prompt_template: str | None = None,
     log: LogFn | None = None,
 ) -> GenerationResult:
@@ -80,8 +81,22 @@ def generate_lecture(
     )
 
     lecture_html, self_check, figure_scripts = _parse_generation_response(response)
+    if figure_client is not None:
+        _log(log, "Generating figure scripts with the figure API.")
+        figure_response = figure_client.chat(
+            [
+                {"role": "system", "content": prompt},
+                {"role": "assistant", "content": f"Structure draft:\n{outline}"},
+                {"role": "user", "content": _figure_script_prompt(material_digest, lecture_html)},
+            ],
+            temperature=config.temperature,
+            max_tokens=min(config.max_tokens, 65536),
+            stream=config.stream,
+        )
+        figure_scripts = _parse_figure_script_response(figure_response)
     lecture_html = _sanitize_currency_symbols(lecture_html)
     self_check = _sanitize_currency_symbols(self_check)
+    lecture_html = _ensure_bilingual_heading(lecture_html, config.project_name)
     lecture_html = ensure_full_html(lecture_html, title=config.project_name)
     script_paths = _write_figure_scripts(scripts_dir, figure_scripts)
     script_errors = _run_figure_scripts(script_paths, output_dir)
@@ -202,6 +217,8 @@ def _lecture_prompt(material_digest: str) -> str:
         "<<<END_FIGURE_SCRIPT>>>\n\n"
         "如果本章没有课程内容图表，不要写 FIGURE_SCRIPT 块。不要为材料来源分布、文件类型分布等元信息造图；图表只服务课程内容本身。"
         "HTML 内部顺序必须是：术语表、10 分钟速记区、主体理论闭环重构、必要前置补全、全部例题与习题完整解答。"
+        "讲义正文中凡是需要图表的位置，必须先插入 <figure> 和 <img src=\"assets/fig_章号_序号_简述.png\"> 占位，"
+        "并在 figcaption 或邻近段落清楚说明该图要表达什么。不要让图表只存在于 Python 脚本而 HTML 不引用。"
         "公式块、卡片、字体、MathJax、assets 相对路径、逐页覆盖核对都要遵守系统规范。"
         "所有数学只允许使用 \\(...\\) 和 \\[...\\] 分隔符；不要使用 $...$ 或 $$...$$。"
         "MathJax 必须使用 tex-chtml.js，加载 [tex]/unicode，并定义 \\pounds、\\euro、\\rupee、\\won、\\ruble、\\bitcoin 宏。"
@@ -209,6 +226,23 @@ def _lecture_prompt(material_digest: str) -> str:
         "也不要写裸 €、£、¥ 或 \\text{\\$}、\\text{$}、\\text{€}、\\text{£}、\\text{¥}。"
         "应写 S = 1.50\\,\\$/\\euro 或 S = 1.50\\,\\mathrm{USD}/\\euro。"
         "涉及 €、£、¥、$ 的金额、汇率、合约规模、计算过程都要做同样处理。\n\n"
+        "课程材料如下：\n"
+        f"{material_digest}"
+    )
+
+
+def _figure_script_prompt(material_digest: str, lecture_html: str) -> str:
+    figure_targets = _figure_targets_summary(lecture_html)
+    return (
+        "请只生成图表 Python 脚本，不要生成或改写 HTML。DeepSeek 已经先生成 lecture.html，下面列出 HTML 中每个 "
+        "assets 图片引用的位置和附近教学上下文；你必须为每个引用生成对应 Python 脚本。必须按以下分隔符返回。\n\n"
+        "<<<FIGURE_SCRIPT:chapter_8/fig_8_1_forward_payoff.py>>>\n"
+        "完整 Python 代码，使用 matplotlib + seaborn，保存到 assets/fig_8_1_forward_payoff.png\n"
+        "<<<END_FIGURE_SCRIPT>>>\n\n"
+        "要求：脚本必须可独立运行；必须创建 assets 目录；不得生成材料来源分布、文件类型分布等元信息图；"
+        "只画课程概念、公式关系、损益曲线、流程或表格重构需要的图。保存路径必须和 HTML 引用的 assets 路径完全一致。\n\n"
+        "HTML 图表目标和上下文如下：\n"
+        f"{figure_targets}\n\n"
         "课程材料如下：\n"
         f"{material_digest}"
     )
@@ -240,6 +274,45 @@ def _parse_generation_response(response: str) -> tuple[str, str, list[dict[str, 
         self_check = lecture_html[tail_index:].strip()
         lecture_html = lecture_html[:tail_index]
     return lecture_html, self_check, []
+
+
+def _figure_targets_summary(lecture_html: str) -> str:
+    refs = list(re.finditer(r"""src=["'](assets/[^"']+)["']""", lecture_html, re.IGNORECASE))
+    if not refs:
+        return (
+            "HTML 中没有 assets 图片引用。请返回空结果，不要为了补图而生成无法插入 HTML 的图片脚本。"
+        )
+    lines: list[str] = []
+    for index, match in enumerate(refs, start=1):
+        ref = match.group(1)
+        start = max(0, match.start() - 900)
+        end = min(len(lecture_html), match.end() + 900)
+        context = re.sub(r"<[^>]+>", " ", lecture_html[start:end])
+        context = re.sub(r"\s+", " ", context).strip()
+        lines.append(f"{index}. {ref}\nContext: {context}")
+    return "\n\n".join(lines)
+
+
+def _parse_figure_script_response(response: str) -> list[dict[str, str]]:
+    marker_result = _parse_marker_response(response.strip())
+    if marker_result is not None:
+        return marker_result[2]
+    json_text = _extract_json(response.strip())
+    if json_text:
+        try:
+            data = json.loads(json_text)
+            scripts = data.get("figure_scripts", [])
+            return scripts if isinstance(scripts, list) else []
+        except json.JSONDecodeError:
+            return []
+    scripts: list[dict[str, str]] = []
+    for script_match in re.finditer(
+        r"<<<FIGURE_SCRIPT:([^>\r\n]+)>>>\s*(.*?)\s*<<<END_FIGURE_SCRIPT>>>",
+        response,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        scripts.append({"path": script_match.group(1).strip(), "code": script_match.group(2).strip()})
+    return scripts
 
 
 def _parse_marker_response(text: str) -> tuple[str, str, list[dict[str, str]]] | None:
@@ -324,6 +397,23 @@ def _run_figure_scripts(script_paths: list[Path], output_dir: Path) -> list[str]
     return errors
 
 
+def _ensure_bilingual_heading(lecture_html: str, project_name: str) -> str:
+    if "lecture-module-heading" in lecture_html:
+        return lecture_html
+    safe_title = project_name.strip() or "Lecture"
+    heading = (
+        '<header class="lecture-module-heading">\n'
+        f"  <h1>模块：{safe_title}</h1>\n"
+        f"  <h2>Module: {safe_title}</h2>\n"
+        "</header>\n"
+    )
+    if re.search(r"<main\b[^>]*>", lecture_html, re.IGNORECASE):
+        return re.sub(r"(<main\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
+    if re.search(r"<body\b[^>]*>", lecture_html, re.IGNORECASE):
+        return re.sub(r"(<body\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
+    return heading + lecture_html
+
+
 def _missing_asset_errors(lecture_html: str, output_dir: Path) -> list[str]:
     errors: list[str] = []
     refs = sorted(set(re.findall(r"""src=["'](assets/[^"']+)["']""", lecture_html)))
@@ -388,9 +478,10 @@ def _sanitize_currency_symbols(text: str) -> str:
         "¥": r"\yen",
     }.items():
         text = text.replace(rf"\text{{{value}}}", macro)
-    text = text.replace("€", r"\euro")
-    text = text.replace("£", r"\pounds")
-    text = text.replace("¥", r"\yen")
+    text = text.replace("€", r"\(\euro\)")
+    text = text.replace("£", r"\(\pounds\)")
+    text = text.replace("¥", r"\(\yen\)")
+    text = re.sub(r"(?<!\\)\$(?![\d])", r"\\(\\$\\)", text)
     return text
 
 
