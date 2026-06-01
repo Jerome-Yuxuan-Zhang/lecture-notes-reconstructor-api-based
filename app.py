@@ -74,6 +74,7 @@ def initial_settings() -> dict[str, Any]:
     settings["output_root"] = settings.get("output_root") or str(DEFAULT_OUTPUT_ROOT)
     settings["base_url"] = settings.get("base_url") or provider.base_url
     settings["model"] = settings.get("model") or provider.model
+    settings["figure_model"] = settings.get("figure_model") or figure_provider.model
     settings["api_key_env"] = settings.get("api_key_env") or provider.api_key_env
     settings["figure_api_key_env"] = settings.get("figure_api_key_env") or figure_provider.api_key_env
     settings["max_tokens"] = int(settings.get("max_tokens") or DEFAULT_MAX_TOKENS)
@@ -190,6 +191,10 @@ def main_page() -> None:
                                 value=settings["figure_provider"],
                                 label="图表代码 API 提供商",
                             ).props("outlined")
+                            figure_model_select = ui.select([], label="图表代码常用模型").props("outlined")
+                            figure_model = ui.input("图表代码模型名称（可手动覆盖）", value=settings["figure_model"]).props(
+                                "outlined clearable"
+                            )
                             figure_api_key = ui.input("图表代码 API Key", password=True, password_toggle_button=True).props("outlined")
                             figure_env_hint = ui.input("图表代码环境变量", value=settings["figure_api_key_env"]).props("outlined clearable")
                             custom_name = ui.input("保存为自定义提供商名称", value="").props("outlined clearable")
@@ -220,6 +225,7 @@ def main_page() -> None:
                                 "figure_provider": figure_provider_select.value,
                                 "base_url": base_url.value or "",
                                 "model": model.value or "",
+                                "figure_model": figure_model.value or "",
                                 "api_key_env": env_hint.value or "",
                                 "figure_api_key_env": figure_env_hint.value or "",
                                 "custom_providers": {
@@ -253,6 +259,16 @@ def main_page() -> None:
                             model_select.value = model.value if model.value in options else provider.model
                             model_select.update()
 
+                        def refresh_figure_model_options(provider: ProviderConfig) -> None:
+                            options = provider.models or [provider.model]
+                            if figure_model.value and figure_model.value not in options:
+                                options = [figure_model.value, *options]
+                            figure_model_select.options = options
+                            figure_model_select.value = (
+                                figure_model.value if figure_model.value in options else provider.model
+                            )
+                            figure_model_select.update()
+
                         def sync_provider(load_saved_key: bool = True) -> None:
                             provider = provider_from_catalog(provider_catalog, provider_select.value)
                             base_url.value = provider.base_url
@@ -269,10 +285,13 @@ def main_page() -> None:
 
                         def sync_figure_provider(load_saved_key: bool = True) -> None:
                             provider = provider_from_catalog(provider_catalog, figure_provider_select.value)
+                            figure_model.value = provider.model
                             figure_env_hint.value = provider.api_key_env
                             figure_api_key.value = os.getenv(provider.api_key_env, "")
                             if load_saved_key and not figure_api_key.value:
                                 figure_api_key.value = load_api_key(provider.name)
+                            refresh_figure_model_options(provider)
+                            figure_model.update()
                             figure_env_hint.update()
                             figure_api_key.update()
 
@@ -280,6 +299,11 @@ def main_page() -> None:
                             if model_select.value:
                                 model.value = model_select.value
                                 model.update()
+
+                        def sync_figure_model_from_select() -> None:
+                            if figure_model_select.value:
+                                figure_model.value = figure_model_select.value
+                                figure_model.update()
 
                         def save_custom_provider() -> None:
                             name = (custom_name.value or "").strip()
@@ -328,6 +352,7 @@ def main_page() -> None:
                             figure_provider_select.value = settings["figure_provider"]
                             base_url.value = settings["base_url"]
                             model.value = settings["model"]
+                            figure_model.value = settings["figure_model"]
                             env_hint.value = settings["api_key_env"]
                             figure_env_hint.value = settings["figure_api_key_env"]
                             temperature.value = settings["temperature"]
@@ -341,12 +366,17 @@ def main_page() -> None:
                                 figure_provider_select.value
                             )
                             refresh_model_options(provider_from_catalog(provider_catalog, provider_select.value))
+                            refresh_figure_model_options(
+                                provider_from_catalog(provider_catalog, figure_provider_select.value)
+                            )
                             ui.notify("配置已重新加载。", color="positive")
 
                         provider_select.on_value_change(lambda _: sync_provider())
                         figure_provider_select.on_value_change(lambda _: sync_figure_provider())
                         model_select.on_value_change(lambda _: sync_model_from_select())
+                        figure_model_select.on_value_change(lambda _: sync_figure_model_from_select())
                         refresh_model_options(provider_from_catalog(provider_catalog, provider_select.value))
+                        refresh_figure_model_options(provider_from_catalog(provider_catalog, figure_provider_select.value))
                         if settings["remember_api_key"]:
                             api_key.value = load_api_key(provider_select.value) or os.getenv(env_hint.value or "", "")
                             figure_api_key.value = load_api_key(figure_provider_select.value) or os.getenv(
@@ -452,6 +482,7 @@ def main_page() -> None:
                                 if not key:
                                     raise ApiConfigurationError("缺少 API Key，不能生成。")
                                 figure_provider = provider_from_catalog(provider_catalog, figure_provider_select.value)
+                                figure_provider.model = figure_model.value or figure_provider.model
                                 figure_key = resolve_figure_api_key()
                                 if not figure_key:
                                     raise ApiConfigurationError("缺少图表代码 API Key，不能生成图表脚本。")

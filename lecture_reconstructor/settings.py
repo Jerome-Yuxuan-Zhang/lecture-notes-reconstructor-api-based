@@ -17,6 +17,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "figure_provider": "Qwen",
     "base_url": "",
     "model": "",
+    "figure_model": "",
     "api_key_env": "",
     "figure_api_key_env": "",
     "custom_providers": {},

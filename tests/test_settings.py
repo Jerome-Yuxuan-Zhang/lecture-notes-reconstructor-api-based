@@ -21,5 +21,6 @@ def test_save_settings_does_not_write_api_key(tmp_path, monkeypatch) -> None:
     assert "secret-value" not in content
     loaded = settings.load_settings()
     assert loaded["provider"] == "Qwen"
+    assert "figure_model" in loaded
     assert loaded["max_tokens"] == 180000
     assert loaded["remember_api_key"] is True
