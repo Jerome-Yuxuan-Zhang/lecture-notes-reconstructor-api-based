@@ -12,6 +12,7 @@ class ProviderConfig:
     model: str
     api_key_env: str
     supports_vision: bool = True
+    max_output_tokens: int | None = None
     models: list[str] = field(default_factory=list)
     extra_body: dict[str, Any] = field(default_factory=dict)
 

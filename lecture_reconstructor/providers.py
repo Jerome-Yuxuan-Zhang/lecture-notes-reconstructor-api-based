@@ -10,6 +10,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
         model="qwen3.7-max",
         api_key_env="DASHSCOPE_API_KEY",
         supports_vision=True,
+        max_output_tokens=65536,
         models=[
             "qwen3.7-max",
             "qwen3-max",

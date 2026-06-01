@@ -33,11 +33,14 @@ class OpenAICompatibleClient:
         max_tokens: int = 8192,
         stream: bool = False,
     ) -> str:
+        request_max_tokens = max_tokens
+        if self.provider.max_output_tokens is not None:
+            request_max_tokens = min(max_tokens, self.provider.max_output_tokens)
         kwargs: dict[str, Any] = {
             "model": self.provider.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": request_max_tokens,
         }
         if self.provider.extra_body:
             kwargs["extra_body"] = self.provider.extra_body
