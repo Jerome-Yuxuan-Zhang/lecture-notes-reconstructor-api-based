@@ -80,6 +80,7 @@ def generate_lecture(
         stream=config.stream,
     )
 
+    inferred_title = _infer_course_title(documents, config.project_name)
     lecture_html, self_check, figure_scripts = _parse_generation_response(response)
     if figure_client is not None:
         _log(log, "Generating figure scripts with the figure API.")
@@ -93,11 +94,12 @@ def generate_lecture(
             max_tokens=min(config.max_tokens, 65536),
             stream=config.stream,
         )
-        figure_scripts = _parse_figure_script_response(figure_response)
+        figure_scripts, figure_specs = _parse_figure_script_response(figure_response)
+        lecture_html = _inject_missing_figures(lecture_html, figure_specs)
     lecture_html = _sanitize_currency_symbols(lecture_html)
     self_check = _sanitize_currency_symbols(self_check)
-    lecture_html = _ensure_bilingual_heading(lecture_html, config.project_name)
-    lecture_html = ensure_full_html(lecture_html, title=config.project_name)
+    lecture_html = _ensure_bilingual_heading(lecture_html, inferred_title)
+    lecture_html = ensure_full_html(lecture_html, title=inferred_title)
     script_paths = _write_figure_scripts(scripts_dir, figure_scripts)
     script_errors = _run_figure_scripts(script_paths, output_dir)
     errors.extend(script_errors)
@@ -152,6 +154,43 @@ def _create_output_dir(output_root: Path, project_name: str) -> Path:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", value).strip("_") or "lecture"
+
+
+def _infer_course_title(documents: list[MaterialDocument], fallback: str) -> str:
+    candidates: list[str] = []
+    for doc in documents:
+        stem = Path(doc.relative_path).stem
+        cleaned = _clean_title_candidate(stem)
+        if cleaned:
+            candidates.append(cleaned)
+        for line in doc.text.splitlines()[:40]:
+            line = line.strip()
+            if not line or len(line) > 120:
+                continue
+            if re.search(r"(module|chapter|lecture|workshop|transaction|translation|exposure|风险|汇率|金融)", line, re.IGNORECASE):
+                cleaned_line = _clean_title_candidate(line)
+                if cleaned_line:
+                    candidates.append(cleaned_line)
+    if candidates:
+        return max(candidates, key=_title_score)
+    return fallback.strip() or "Lecture"
+
+
+def _clean_title_candidate(value: str) -> str:
+    value = re.sub(r"[_-]+", " ", value)
+    value = re.sub(r"\b(pdf|pptx|docx|xlsx|csv|solution|reference|formula|sheet)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value).strip(" -_")
+    return value
+
+
+def _title_score(value: str) -> tuple[int, int]:
+    keywords = re.findall(
+        r"(module|chapter|lecture|transaction|translation|exposure|international|finance|风险|汇率|金融|交易|折算)",
+        value,
+        flags=re.IGNORECASE,
+    )
+    length_score = -abs(len(value) - 70)
+    return len(keywords), length_score
 
 
 def _load_prompt_template() -> str:
@@ -235,7 +274,15 @@ def _figure_script_prompt(material_digest: str, lecture_html: str) -> str:
     figure_targets = _figure_targets_summary(lecture_html)
     return (
         "请只生成图表 Python 脚本，不要生成或改写 HTML。DeepSeek 已经先生成 lecture.html，下面列出 HTML 中每个 "
-        "assets 图片引用的位置和附近教学上下文；你必须为每个引用生成对应 Python 脚本。必须按以下分隔符返回。\n\n"
+        "assets 图片引用的位置和附近教学上下文；你必须为每个引用生成对应 Python 脚本。如果 HTML 中没有 assets 图片引用，"
+        "你必须根据讲义内容和课程材料主动提出 1-3 张最必要的课程内容图，并为每张图同时返回 FIGURE_SPEC 和 FIGURE_SCRIPT。"
+        "必须按以下分隔符返回。\n\n"
+        "<<<FIGURE_SPEC>>>\n"
+        "path: assets/fig_8_1_forward_payoff.png\n"
+        "alt: Forward payoff diagram\n"
+        "caption: 远期合约多头和空头的损益随到期即期汇率变化\n"
+        "insert_after: 远期合约\n"
+        "<<<END_FIGURE_SPEC>>>\n\n"
         "<<<FIGURE_SCRIPT:chapter_8/fig_8_1_forward_payoff.py>>>\n"
         "完整 Python 代码，使用 matplotlib + seaborn，保存到 assets/fig_8_1_forward_payoff.png\n"
         "<<<END_FIGURE_SCRIPT>>>\n\n"
@@ -280,7 +327,8 @@ def _figure_targets_summary(lecture_html: str) -> str:
     refs = list(re.finditer(r"""src=["'](assets/[^"']+)["']""", lecture_html, re.IGNORECASE))
     if not refs:
         return (
-            "HTML 中没有 assets 图片引用。请返回空结果，不要为了补图而生成无法插入 HTML 的图片脚本。"
+            "HTML 中没有 assets 图片引用。请主动提出 1-3 张最必要的课程内容图，返回 FIGURE_SPEC 和 FIGURE_SCRIPT；"
+            "软件会根据 FIGURE_SPEC 自动把 <figure> 插入 lecture.html。"
         )
     lines: list[str] = []
     for index, match in enumerate(refs, start=1):
@@ -293,18 +341,19 @@ def _figure_targets_summary(lecture_html: str) -> str:
     return "\n\n".join(lines)
 
 
-def _parse_figure_script_response(response: str) -> list[dict[str, str]]:
+def _parse_figure_script_response(response: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     marker_result = _parse_marker_response(response.strip())
     if marker_result is not None:
-        return marker_result[2]
+        return marker_result[2], _parse_figure_specs(response)
     json_text = _extract_json(response.strip())
     if json_text:
         try:
             data = json.loads(json_text)
             scripts = data.get("figure_scripts", [])
-            return scripts if isinstance(scripts, list) else []
+            specs = data.get("figure_specs", [])
+            return scripts if isinstance(scripts, list) else [], specs if isinstance(specs, list) else []
         except json.JSONDecodeError:
-            return []
+            return [], []
     scripts: list[dict[str, str]] = []
     for script_match in re.finditer(
         r"<<<FIGURE_SCRIPT:([^>\r\n]+)>>>\s*(.*?)\s*<<<END_FIGURE_SCRIPT>>>",
@@ -312,7 +361,55 @@ def _parse_figure_script_response(response: str) -> list[dict[str, str]]:
         re.DOTALL | re.IGNORECASE,
     ):
         scripts.append({"path": script_match.group(1).strip(), "code": script_match.group(2).strip()})
-    return scripts
+    return scripts, _parse_figure_specs(response)
+
+
+def _parse_figure_specs(response: str) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for spec_match in re.finditer(
+        r"<<<FIGURE_SPEC>>>\s*(.*?)\s*<<<END_FIGURE_SPEC>>>",
+        response,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        spec: dict[str, str] = {}
+        for line in spec_match.group(1).splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            spec[key.strip().lower()] = value.strip()
+        if spec.get("path"):
+            specs.append(spec)
+    return specs
+
+
+def _inject_missing_figures(lecture_html: str, figure_specs: list[dict[str, str]]) -> str:
+    existing_refs = set(re.findall(r"""src=["'](assets/[^"']+)["']""", lecture_html, re.IGNORECASE))
+    additions: list[str] = []
+    for spec in figure_specs:
+        path = spec.get("path", "").replace("\\", "/")
+        if not path.startswith("assets/") or path in existing_refs:
+            continue
+        alt = spec.get("alt") or spec.get("caption") or Path(path).stem
+        caption = spec.get("caption") or alt
+        figure_html = (
+            "\n<figure>\n"
+            f'  <img src="{path}" alt="{alt}">\n'
+            f"  <figcaption>{caption}</figcaption>\n"
+            "</figure>\n"
+        )
+        marker = spec.get("insert_after", "").strip()
+        if marker and marker in lecture_html:
+            insert_at = lecture_html.find(marker) + len(marker)
+            lecture_html = lecture_html[:insert_at] + figure_html + lecture_html[insert_at:]
+            existing_refs.add(path)
+        else:
+            additions.append(figure_html)
+    if additions:
+        if re.search(r"</body>", lecture_html, re.IGNORECASE):
+            lecture_html = re.sub(r"</body>", "\n".join(additions) + "\n</body>", lecture_html, count=1, flags=re.IGNORECASE)
+        else:
+            lecture_html += "\n" + "\n".join(additions)
+    return lecture_html
 
 
 def _parse_marker_response(text: str) -> tuple[str, str, list[dict[str, str]]] | None:

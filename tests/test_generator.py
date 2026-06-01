@@ -107,6 +107,39 @@ Path('assets/fig_1_1_payoff.png').write_text('ok', encoding='utf-8')
 <<<END_FIGURE_SCRIPT>>>"""
 
 
+class NoFigureMainClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return "Outline: Chapter 1 Test"
+        return """<<<LECTURE_HTML>>>
+<h1>Glossary</h1>
+<p>Forward contracts are central to this module.</p>
+<<<END_LECTURE_HTML>>>
+<<<SELF_CHECK>>>
+# self check
+<<<END_SELF_CHECK>>>"""
+
+
+class FigureSpecClient:
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        return """<<<FIGURE_SPEC>>>
+path: assets/fig_1_1_forward_contract.png
+alt: Forward contract payoff
+caption: Forward contract payoff as the future spot rate changes
+insert_after: Forward contracts
+<<<END_FIGURE_SPEC>>>
+
+<<<FIGURE_SCRIPT:chapter_1/fig_1_1_forward_contract.py>>>
+from pathlib import Path
+Path('assets').mkdir(exist_ok=True)
+Path('assets/fig_1_1_forward_contract.png').write_text('ok', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
 def _config(tmp_path: Path) -> GenerationConfig:
     return GenerationConfig(
         input_dir=tmp_path,
@@ -265,8 +298,31 @@ def test_two_stage_generation_uses_figure_client_for_scripts(tmp_path: Path) -> 
     assert (result.output_dir / "assets" / "fig_1_1_payoff.png").exists()
     html = result.html_path.read_text(encoding="utf-8")
     assert "lecture-module-heading" in html
-    assert "模块：course" in html
-    assert "Module: course" in html
+    assert "模块：note" in html
+    assert "Module: note" in html
+
+
+def test_figure_specs_are_inserted_when_html_has_no_asset_refs(tmp_path: Path) -> None:
+    doc_path = tmp_path / "M3.1_Lecture_Ch08-Ch10_Transaction-and-Translation-Exposure.pdf"
+    doc_path.write_text("Chapter 8 Transaction Exposure", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path=doc_path.name,
+            material_type="pdf",
+            text="Chapter 8 Transaction Exposure\nForward contracts are central.",
+            status="extracted",
+        )
+    ]
+
+    result = generate_lecture(docs, _config(tmp_path), NoFigureMainClient(), figure_client=FigureSpecClient())
+
+    assert (result.output_dir / "assets" / "fig_1_1_forward_contract.png").exists()
+    html = result.html_path.read_text(encoding="utf-8")
+    assert 'src="assets/fig_1_1_forward_contract.png"' in html
+    assert "Forward contract payoff as the future spot rate changes" in html
+    assert "Transaction and Translation Exposure" in html
+    assert "Module: M3.1 Lecture Ch08 Ch10 Transaction and Translation Exposure" in html
 
 
 def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
