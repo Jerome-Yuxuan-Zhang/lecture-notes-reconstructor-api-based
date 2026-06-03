@@ -107,7 +107,7 @@ def pick_directory(initial_dir: str | None = None) -> str:
 
 
 async def browse_directory(target_input: Any) -> None:
-    selected = await asyncio.to_thread(pick_directory, target_input.value or str(ROOT))
+    selected = pick_directory(target_input.value or str(ROOT))
     if selected:
         target_input.value = selected
         target_input.update()
