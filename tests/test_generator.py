@@ -8,6 +8,7 @@ from lecture_reconstructor.generator import _build_material_digest, _sanitize_cu
 from lecture_reconstructor.html_assets import LECTURE_CSS, ensure_full_html
 from lecture_reconstructor.models import GenerationConfig, MaterialDocument
 from lecture_reconstructor.providers import get_provider
+from lecture_reconstructor.reference_search import search_references
 
 
 class DummyChatClient:
@@ -31,6 +32,22 @@ class DummyChatClient:
             },
             ensure_ascii=False,
         )
+
+
+class PromptCaptureClient:
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return "Outline: investment banking needs deeper explanation"
+        return """<<<LECTURE_HTML>>>
+<h1>Glossary</h1><p>Investment banking</p>
+<<<END_LECTURE_HTML>>>
+<<<SELF_CHECK>>>
+# self check
+<<<END_SELF_CHECK>>>"""
 
 
 class MarkerChatClient:
@@ -264,10 +281,69 @@ def test_material_digest_separates_reference_materials(tmp_path: Path) -> None:
     digest = _build_material_digest(docs)
 
     assert "PRIMARY MATERIALS" in digest
-    assert "REFERENCE MATERIALS" in digest
+    assert "REFERENCE INDEX" in digest
+    assert "RETRIEVED REFERENCE EXCERPTS" in digest
     assert "PRIMARY_MARKER" in digest
     assert "REFERENCE_TAIL" not in digest
     assert "不要纳入逐页覆盖" in digest
+
+
+def test_reference_search_retrieves_relevant_textbook_passages(tmp_path: Path) -> None:
+    ref_path = tmp_path / "references" / "textbook.md"
+    ref_path.parent.mkdir()
+    docs = [
+        MaterialDocument(
+            source_path=ref_path,
+            relative_path="references/textbook.md",
+            material_type="md",
+            text=(
+                "Bond duration measures interest-rate sensitivity.\n\n"
+                "Investment banking includes underwriting, advisory services, and securities distribution."
+            ),
+            status="extracted",
+            role="reference",
+        )
+    ]
+
+    hits = search_references(docs, "Explain investment banking in financial institutions")
+
+    assert hits
+    assert "Investment banking includes underwriting" in hits[0].text
+
+
+def test_generation_uses_reference_index_for_outline_and_hits_for_final_prompt(tmp_path: Path) -> None:
+    primary_path = tmp_path / "slides.md"
+    reference_path = tmp_path / "references" / "textbook.md"
+    reference_path.parent.mkdir()
+    docs = [
+        MaterialDocument(
+            source_path=primary_path,
+            relative_path="slides.md",
+            material_type="md",
+            text="Investment banking",
+            status="extracted",
+            role="primary",
+        ),
+        MaterialDocument(
+            source_path=reference_path,
+            relative_path="references/textbook.md",
+            material_type="md",
+            text="Investment banking includes underwriting, M&A advisory, and securities distribution.",
+            status="extracted",
+            role="reference",
+        ),
+    ]
+    client = PromptCaptureClient()
+
+    result = generate_lecture(docs, _config(tmp_path), client)
+
+    outline_prompt = client.calls[0][-1]["content"]
+    final_prompt = client.calls[1][-1]["content"]
+    assert "REFERENCE INDEX" in outline_prompt
+    assert "underwriting, M&A advisory" not in outline_prompt
+    assert "RETRIEVED REFERENCE EXCERPTS" in final_prompt
+    assert "underwriting, M&A advisory" in final_prompt
+    assert (result.output_dir / "reference_hits.json").exists()
 
 
 def test_marker_response_writes_and_runs_figure_scripts(tmp_path: Path) -> None:

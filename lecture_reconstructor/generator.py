@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 from .html_assets import ensure_full_html
 from .models import GenerationConfig, GenerationResult, MaterialDocument
 from .packaging import package_output
+from .reference_search import format_reference_hits, reference_index, search_references
 
 
 class ChatClient(Protocol):
@@ -54,19 +55,28 @@ def generate_lecture(
         encoding="utf-8",
     )
 
-    material_digest = _build_material_digest(documents)
+    outline_digest = _build_material_digest(documents, include_reference_excerpts=False)
     prompt = prompt_template or _load_prompt_template()
 
     _log(log, "Generating structure draft.")
     outline = client.chat(
         [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": _outline_prompt(material_digest)},
+            {"role": "user", "content": _outline_prompt(outline_digest)},
         ],
         temperature=config.temperature,
         max_tokens=min(config.max_tokens, 4096),
         stream=config.stream,
     )
+
+    _log(log, "Searching reference materials for relevant backup excerpts.")
+    reference_query = _build_reference_query(documents, outline)
+    reference_hits = search_references(documents, reference_query)
+    (output_dir / "reference_hits.json").write_text(
+        json.dumps([hit.to_dict() for hit in reference_hits], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    material_digest = _build_material_digest(documents, reference_hits=reference_hits)
 
     _log(log, "Generating lecture HTML and self-check.")
     response = client.chat(
@@ -217,28 +227,25 @@ def _load_prompt_template() -> str:
 def _build_material_digest(
     documents: list[MaterialDocument],
     limit_per_doc: int = 80000,
-    reference_limit_per_doc: int = 8000,
+    *,
+    include_reference_excerpts: bool = True,
+    reference_hits: list | None = None,
 ) -> str:
     primary_blocks: list[str] = []
-    reference_blocks: list[str] = []
     for index, doc in enumerate(documents, start=1):
         is_reference = doc.role == "reference"
-        doc_limit = reference_limit_per_doc if is_reference else limit_per_doc
+        if is_reference:
+            continue
+        doc_limit = limit_per_doc
         text = doc.text.strip() or "[无可抽取文字]"
         if len(text) > doc_limit:
-            if is_reference:
-                text = text[:doc_limit] + "\n[参考资料内容过长，仅截取片段供必要前置补全使用；不要纳入逐页覆盖。]"
-            else:
-                text = text[:doc_limit] + "\n[该文件内容过长，已截断供本轮生成使用。]"
+            text = text[:doc_limit] + "\n[该文件内容过长，已截断供本轮生成使用。]"
         warning = f"\nWarnings: {'; '.join(doc.warnings)}" if doc.warnings else ""
         block = (
             f"### Source {index}: {doc.relative_path}\n"
             f"Type: {doc.material_type}\nRole: {doc.role}\nStatus: {doc.status}{warning}\n\n{text}"
         )
-        if is_reference:
-            reference_blocks.append(block)
-        else:
-            primary_blocks.append(block)
+        primary_blocks.append(block)
 
     sections: list[str] = []
     if primary_blocks:
@@ -247,14 +254,27 @@ def _build_material_digest(
             "These files define the lecture scope and must be covered in self-check.\n\n"
             + "\n\n".join(primary_blocks)
         )
-    if reference_blocks:
-        sections.append(
-            "## REFERENCE MATERIALS / 参考资料\n"
-            "Use these only to clarify concepts or fill prerequisites. Do not treat them as pages that must be covered, "
-            "and do not include them in the page-by-page coverage table unless the primary materials explicitly point to them.\n\n"
-            + "\n\n".join(reference_blocks)
-        )
+    index = reference_index(documents)
+    if index:
+        sections.append(index)
+    if include_reference_excerpts:
+        sections.append(format_reference_hits(reference_hits or []))
     return "\n\n".join(sections)
+
+
+def _build_reference_query(documents: list[MaterialDocument], outline: str, limit_per_doc: int = 12000) -> str:
+    primary_parts = [
+        f"{doc.relative_path}\n{doc.text[:limit_per_doc]}"
+        for doc in documents
+        if doc.role != "reference" and doc.text.strip()
+    ]
+    return (
+        "Search reference materials for textbook passages that deepen concepts required by this outline "
+        "and these primary lecture materials. Prioritize exact English terms and bilingual finance terms.\n\n"
+        f"OUTLINE:\n{outline}\n\n"
+        "PRIMARY MATERIALS:\n"
+        + "\n\n".join(primary_parts)
+    )
 
 
 def _outline_prompt(material_digest: str) -> str:

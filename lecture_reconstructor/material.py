@@ -41,7 +41,6 @@ REFERENCE_PATH_PARTS = {
     "教科书",
 }
 REFERENCE_PDF_PAGE_THRESHOLD = 120
-REFERENCE_PDF_EXTRACT_PAGES = 30
 
 
 class VisionClient(Protocol):
@@ -96,10 +95,10 @@ def extract_materials(
             elif ext == ".pdf":
                 if doc.role == "reference" or _is_large_reference_pdf(doc.source_path):
                     doc.role = "reference"
-                    doc.text = _read_pdf(doc.source_path, max_pages=REFERENCE_PDF_EXTRACT_PAGES)
+                    doc.text = _read_pdf(doc.source_path)
                     doc.warnings.append(
-                        f"Reference PDF: extracted first {REFERENCE_PDF_EXTRACT_PAGES} pages only; "
-                        "use as supporting context, not primary coverage material."
+                        "Reference PDF: indexed as searchable backup material; "
+                        "retrieved excerpts are used only when primary materials need deeper support."
                     )
                 else:
                     doc.text = _read_pdf(doc.source_path)
