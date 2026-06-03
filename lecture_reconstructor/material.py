@@ -25,6 +25,23 @@ SUPPORTED_EXTENSIONS = {
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 GENERATED_OUTPUT_DIR = re.compile(r"^\d{8}_\d{6}_.+")
+REFERENCE_PATH_PARTS = {
+    "reference",
+    "references",
+    "textbook",
+    "textbooks",
+    "book",
+    "books",
+    "reading",
+    "readings",
+    "supplement",
+    "supplementary",
+    "参考",
+    "教材",
+    "教科书",
+}
+REFERENCE_PDF_PAGE_THRESHOLD = 120
+REFERENCE_PDF_EXTRACT_PAGES = 30
 
 
 class VisionClient(Protocol):
@@ -50,6 +67,7 @@ def scan_materials(input_dir: Path) -> list[MaterialDocument]:
                 source_path=file_path,
                 relative_path=file_path.relative_to(root).as_posix(),
                 material_type=ext.lstrip("."),
+                role=_initial_material_role(file_path.relative_to(root)),
                 status="indexed",
             )
         )
@@ -76,7 +94,15 @@ def extract_materials(
             elif ext == ".xlsx":
                 doc.text = _read_xlsx(doc.source_path)
             elif ext == ".pdf":
-                doc.text = _read_pdf(doc.source_path)
+                if doc.role == "reference" or _is_large_reference_pdf(doc.source_path):
+                    doc.role = "reference"
+                    doc.text = _read_pdf(doc.source_path, max_pages=REFERENCE_PDF_EXTRACT_PAGES)
+                    doc.warnings.append(
+                        f"Reference PDF: extracted first {REFERENCE_PDF_EXTRACT_PAGES} pages only; "
+                        "use as supporting context, not primary coverage material."
+                    )
+                else:
+                    doc.text = _read_pdf(doc.source_path)
                 if not doc.text.strip() and config.enable_vision_ocr:
                     doc.text = _ocr_pdf_pages(doc.source_path, client)
             elif ext in IMAGE_EXTENSIONS:
@@ -90,6 +116,30 @@ def extract_materials(
             doc.warnings.append(str(exc))
         extracted.append(doc)
     return extracted
+
+
+def _initial_material_role(relative_path: Path) -> str:
+    parts = {part.casefold() for part in relative_path.parts}
+    stem = relative_path.stem.casefold()
+    if parts & REFERENCE_PATH_PARTS:
+        return "reference"
+    if any(marker in stem for marker in REFERENCE_PATH_PARTS):
+        return "reference"
+    return "primary"
+
+
+def _is_large_reference_pdf(path: Path) -> bool:
+    if path.suffix.lower() != ".pdf":
+        return False
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return False
+    try:
+        reader = PdfReader(str(path))
+        return len(reader.pages) >= REFERENCE_PDF_PAGE_THRESHOLD
+    except Exception:
+        return False
 
 
 def _read_text(path: Path) -> str:
@@ -153,7 +203,7 @@ def _read_xlsx(path: Path) -> str:
     return "\n".join(parts)
 
 
-def _read_pdf(path: Path) -> str:
+def _read_pdf(path: Path, max_pages: int | None = None) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -161,6 +211,8 @@ def _read_pdf(path: Path) -> str:
     reader = PdfReader(str(path))
     pages: list[str] = []
     for index, page in enumerate(reader.pages, start=1):
+        if max_pages is not None and index > max_pages:
+            break
         text = page.extract_text() or ""
         if text.strip():
             pages.append(f"[Page {index}]\n{text}")

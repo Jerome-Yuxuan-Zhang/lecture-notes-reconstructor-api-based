@@ -418,6 +418,7 @@ def main_page() -> None:
                         material_table = ui.table(
                             columns=[
                                 {"name": "relative_path", "label": "文件", "field": "relative_path", "align": "left"},
+                                {"name": "role", "label": "Role", "field": "role"},
                                 {"name": "material_type", "label": "类型", "field": "material_type"},
                                 {"name": "status", "label": "状态", "field": "status"},
                             ],

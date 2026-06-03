@@ -25,14 +25,19 @@ def test_scan_materials_recurses_and_filters(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("# A", encoding="utf-8")
     (tmp_path / "nested").mkdir()
     (tmp_path / "nested" / "b.txt").write_text("B", encoding="utf-8")
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "textbook.md").write_text("book", encoding="utf-8")
     (tmp_path / "20260528_153603_lecture").mkdir()
     (tmp_path / "20260528_153603_lecture" / "self_check.md").write_text("old output", encoding="utf-8")
     (tmp_path / "ignore.exe").write_text("x", encoding="utf-8")
 
     docs = scan_materials(tmp_path)
 
-    assert [doc.relative_path for doc in docs] == ["a.md", "nested/b.txt"]
+    assert [doc.relative_path for doc in docs] == ["a.md", "nested/b.txt", "reference/textbook.md"]
     assert {doc.material_type for doc in docs} == {"md", "txt"}
+    roles = {doc.relative_path: doc.role for doc in docs}
+    assert roles["a.md"] == "primary"
+    assert roles["reference/textbook.md"] == "reference"
 
 
 def test_extract_text_and_image_ocr(tmp_path: Path) -> None:

@@ -38,6 +38,7 @@ class MaterialDocument:
     source_path: Path
     relative_path: str
     material_type: str
+    role: str = "primary"
     page_label: str | None = None
     text: str = ""
     image_path: Path | None = None

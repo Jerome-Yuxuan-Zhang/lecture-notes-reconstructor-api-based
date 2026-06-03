@@ -236,6 +236,40 @@ def test_material_digest_keeps_up_to_80k_chars_by_default(tmp_path: Path) -> Non
     assert "已截断" not in digest
 
 
+def test_material_digest_separates_reference_materials(tmp_path: Path) -> None:
+    primary_path = tmp_path / "lecture.md"
+    reference_path = tmp_path / "reference" / "textbook.md"
+    reference_path.parent.mkdir()
+    primary_text = "PRIMARY_MARKER"
+    reference_text = "R" * 9000 + "REFERENCE_TAIL"
+    docs = [
+        MaterialDocument(
+            source_path=primary_path,
+            relative_path="lecture.md",
+            material_type="md",
+            text=primary_text,
+            status="extracted",
+            role="primary",
+        ),
+        MaterialDocument(
+            source_path=reference_path,
+            relative_path="reference/textbook.md",
+            material_type="md",
+            text=reference_text,
+            status="extracted",
+            role="reference",
+        ),
+    ]
+
+    digest = _build_material_digest(docs)
+
+    assert "PRIMARY MATERIALS" in digest
+    assert "REFERENCE MATERIALS" in digest
+    assert "PRIMARY_MARKER" in digest
+    assert "REFERENCE_TAIL" not in digest
+    assert "不要纳入逐页覆盖" in digest
+
+
 def test_marker_response_writes_and_runs_figure_scripts(tmp_path: Path) -> None:
     doc_path = tmp_path / "note.md"
     doc_path.write_text("Concept A", encoding="utf-8")

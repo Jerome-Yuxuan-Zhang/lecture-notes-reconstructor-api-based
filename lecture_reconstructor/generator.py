@@ -214,18 +214,47 @@ def _load_prompt_template() -> str:
     return "你是讲义重构助手。生成完整中文 HTML 讲义和 HTML 外部自检。"
 
 
-def _build_material_digest(documents: list[MaterialDocument], limit_per_doc: int = 80000) -> str:
-    blocks: list[str] = []
+def _build_material_digest(
+    documents: list[MaterialDocument],
+    limit_per_doc: int = 80000,
+    reference_limit_per_doc: int = 8000,
+) -> str:
+    primary_blocks: list[str] = []
+    reference_blocks: list[str] = []
     for index, doc in enumerate(documents, start=1):
+        is_reference = doc.role == "reference"
+        doc_limit = reference_limit_per_doc if is_reference else limit_per_doc
         text = doc.text.strip() or "[无可抽取文字]"
-        if len(text) > limit_per_doc:
-            text = text[:limit_per_doc] + "\n[该文件内容过长，已截断供本轮生成使用。]"
+        if len(text) > doc_limit:
+            if is_reference:
+                text = text[:doc_limit] + "\n[参考资料内容过长，仅截取片段供必要前置补全使用；不要纳入逐页覆盖。]"
+            else:
+                text = text[:doc_limit] + "\n[该文件内容过长，已截断供本轮生成使用。]"
         warning = f"\nWarnings: {'; '.join(doc.warnings)}" if doc.warnings else ""
-        blocks.append(
+        block = (
             f"### Source {index}: {doc.relative_path}\n"
-            f"Type: {doc.material_type}\nStatus: {doc.status}{warning}\n\n{text}"
+            f"Type: {doc.material_type}\nRole: {doc.role}\nStatus: {doc.status}{warning}\n\n{text}"
         )
-    return "\n\n".join(blocks)
+        if is_reference:
+            reference_blocks.append(block)
+        else:
+            primary_blocks.append(block)
+
+    sections: list[str] = []
+    if primary_blocks:
+        sections.append(
+            "## PRIMARY MATERIALS / 主讲材料\n"
+            "These files define the lecture scope and must be covered in self-check.\n\n"
+            + "\n\n".join(primary_blocks)
+        )
+    if reference_blocks:
+        sections.append(
+            "## REFERENCE MATERIALS / 参考资料\n"
+            "Use these only to clarify concepts or fill prerequisites. Do not treat them as pages that must be covered, "
+            "and do not include them in the page-by-page coverage table unless the primary materials explicitly point to them.\n\n"
+            + "\n\n".join(reference_blocks)
+        )
+    return "\n\n".join(sections)
 
 
 def _outline_prompt(material_digest: str) -> str:
