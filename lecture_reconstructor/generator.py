@@ -129,6 +129,14 @@ def generate_lecture(
     lecture_html = _ensure_bilingual_heading(lecture_html, inferred_title)
     lecture_html = ensure_full_html(lecture_html, title=inferred_title)
     script_paths = _write_figure_scripts(scripts_dir, figure_scripts)
+    script_errors = _repair_non_ascii_figure_scripts(
+        script_paths,
+        output_dir,
+        figure_client=figure_client,
+        config=config,
+        log=log,
+    )
+    errors.extend(script_errors)
     script_errors = _run_figure_scripts(
         script_paths,
         output_dir,
@@ -361,6 +369,9 @@ def _figure_script_prompt(material_digest: str, lecture_html: str) -> str:
         "<<<END_FIGURE_SCRIPT>>>\n\n"
         "要求：脚本必须可独立运行；必须创建 assets 目录；不得生成材料来源分布、文件类型分布等元信息图；"
         "只画课程概念、公式关系、损益曲线、流程或表格重构需要的图。保存路径必须和 HTML 引用的 assets 路径完全一致。\n\n"
+        "Hard rule for every Python script: all visible plot text must be English-only ASCII. "
+        "Do not put Chinese, CJK characters, mojibake, full-width punctuation, or Chinese font setup in Python figure scripts. "
+        "Use labels such as Financial Markets, Depositors, Flow of Funds, Principal + Interest.\n\n"
         "HTML 图表目标和上下文如下：\n"
         f"{figure_targets}\n\n"
         "课程材料如下：\n"
@@ -581,6 +592,64 @@ def _run_figure_scripts(
     return errors
 
 
+def _repair_non_ascii_figure_scripts(
+    script_paths: list[Path],
+    output_dir: Path,
+    *,
+    figure_client: ChatClient | None = None,
+    config: GenerationConfig | None = None,
+    log: LogFn | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    for script_path in script_paths:
+        code = script_path.read_text(encoding="utf-8", errors="replace")
+        report = _non_ascii_report(code)
+        if not report:
+            continue
+        if figure_client is None:
+            errors.append(
+                f"Figure script contains non-ASCII plot text and no figure API is available for repair: "
+                f"{script_path.relative_to(output_dir)}\n{report}"
+            )
+            continue
+        _log(log, f"Figure script contains non-ASCII text; asking figure API to rewrite {script_path.name}.")
+        failure = FigureRunFailure(
+            script_path=script_path,
+            message=(
+                "Non-ASCII characters were detected before execution. "
+                "Rewrite every visible label/title/annotation/legend in English-only ASCII."
+            ),
+            stderr=report,
+        )
+        fixed = _debug_figure_script(script_path, output_dir, failure, figure_client, config)
+        if not fixed:
+            errors.append(
+                f"Figure API did not return a usable ASCII-only repair for {script_path.relative_to(output_dir)}.\n{report}"
+            )
+            continue
+        fixed_report = _non_ascii_report(fixed)
+        if fixed_report:
+            errors.append(
+                f"Figure API repair still contains non-ASCII text for {script_path.relative_to(output_dir)}.\n"
+                f"{fixed_report}"
+            )
+            continue
+        script_path.write_text(fixed + "\n", encoding="utf-8")
+    return errors
+
+
+def _non_ascii_report(text: str, max_items: int = 12) -> str:
+    items: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        chars = sorted({char for char in line if ord(char) > 127})
+        if chars:
+            sample = "".join(chars[:12])
+            items.append(f"line {line_number}: {sample} | {line.strip()[:160]}")
+            if len(items) >= max_items:
+                break
+    return "\n".join(items)
+
+
 def _run_single_figure_script(script_path: Path, output_dir: Path, env: dict[str, str]) -> FigureRunFailure | None:
     try:
         result = subprocess.run(
@@ -637,7 +706,9 @@ def _debug_figure_script(
                     "You repair Python matplotlib/seaborn figure scripts. Return only one repaired "
                     "FIGURE_SCRIPT block. The script must terminate quickly, create required directories, "
                     "save the expected assets image, use MPLBACKEND=Agg-compatible code, and avoid network, "
-                    "interactive windows, infinite loops, plt.show(), input(), or long font downloads."
+                    "interactive windows, infinite loops, plt.show(), input(), or long font downloads. "
+                    "All visible plot text must be English-only ASCII; remove Chinese, CJK characters, "
+                    "mojibake, full-width punctuation, and Chinese font setup."
                 ),
             },
             {
@@ -677,6 +748,8 @@ def _figure_debug_prompt(script_path: Path, output_dir: Path, original_code: str
         "- Must use only local computation; no downloads, no web requests, no interactive input.\n"
         "- Must not call plt.show().\n"
         "- Must create the assets directory before saving.\n"
+        "- Must contain only ASCII characters in the repaired Python source.\n"
+        "- All visible labels, titles, legends, and annotations must be English-only ASCII.\n"
         "- Must save these expected image paths if present:\n"
         f"{expected_note}\n\n"
         "Failure report:\n"

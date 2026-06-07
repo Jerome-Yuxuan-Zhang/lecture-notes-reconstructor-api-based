@@ -455,6 +455,35 @@ def test_failed_figure_script_is_sent_back_to_figure_api_for_debug(tmp_path: Pat
     assert (result.output_dir / "assets" / "fig_1_1_payoff.png").read_text(encoding="utf-8") == "fixed"
 
 
+def test_non_ascii_figure_script_is_rewritten_before_execution(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    broken_code = (
+        "from pathlib import Path\n"
+        "Path('assets').mkdir(exist_ok=True)\n"
+        "Path('assets/fig_1_1_payoff.png').write_text('中文标签', encoding='utf-8')\n"
+    )
+    figure_client = BrokenThenFixedFigureClient(broken_code)
+
+    result = generate_lecture(docs, _config(tmp_path), MainLectureOnlyClient(), figure_client=figure_client)
+
+    script = result.output_dir / "script4course" / "chapter_1" / "fig_1_1_payoff.py"
+    assert figure_client.calls == 2
+    assert "Non-ASCII characters were detected" in figure_client.debug_prompt
+    assert all(ord(char) < 128 for char in script.read_text(encoding="utf-8"))
+    assert result.errors == []
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").read_text(encoding="utf-8") == "fixed"
+
+
 def test_timed_out_figure_script_is_debugged_by_figure_api(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(generator_module, "FIGURE_SCRIPT_TIMEOUT_SECONDS", 1)
     doc_path = tmp_path / "note.md"
