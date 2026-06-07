@@ -147,7 +147,7 @@ def generate_lecture(
     errors.extend(script_errors)
     errors.extend(_missing_asset_errors(lecture_html, output_dir))
 
-    html_path = output_dir / "lecture.html"
+    html_path = output_dir / _html_filename(inferred_title)
     html_path.write_text(lecture_html, encoding="utf-8")
     self_check_path = output_dir / "self_check.md"
     self_check_path.write_text(self_check or _fallback_self_check(documents), encoding="utf-8")
@@ -198,7 +198,15 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", value).strip("_") or "lecture"
 
 
+def _html_filename(value: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*]+', "_", value).strip().rstrip(".") or "lecture"
+    return f"{name}.html"
+
+
 def _infer_course_title(documents: list[MaterialDocument], fallback: str) -> str:
+    fallback_title = _topic_title_from_value(fallback)
+    if fallback_title:
+        return fallback_title
     candidates: list[str] = []
     for doc in documents:
         stem = Path(doc.relative_path).stem
@@ -216,6 +224,25 @@ def _infer_course_title(documents: list[MaterialDocument], fallback: str) -> str
     if candidates:
         return max(candidates, key=_title_score)
     return fallback.strip() or "Lecture"
+
+
+def _topic_title_from_value(value: str) -> str | None:
+    raw_match = re.search(r"\bTopic[_\s-]*(\d+)_-_(.+)$", value, re.IGNORECASE)
+    if raw_match:
+        title = raw_match.group(2).replace("_", " ")
+        title = re.sub(r"\s+", " ", title).strip()
+        if title:
+            return f"Topic {int(raw_match.group(1))} - {title}"
+    normalized = re.sub(r"[_-]+", " ", value)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    match = re.search(r"\bTopic\s+(\d+)\s+(.+)$", normalized, re.IGNORECASE)
+    if not match:
+        return None
+    title = match.group(2).strip()
+    title = re.sub(r"^(lecture|module)\s+", "", title, flags=re.IGNORECASE).strip()
+    if title:
+        return f"Topic {int(match.group(1))} - {title}"
+    return None
 
 
 def _clean_title_candidate(value: str) -> str:
@@ -762,8 +789,34 @@ def _figure_debug_prompt(script_path: Path, output_dir: Path, original_code: str
 
 
 def _ensure_bilingual_heading(lecture_html: str, project_name: str) -> str:
+    heading = _heading_html(project_name)
     if "lecture-module-heading" in lecture_html:
-        return lecture_html
+        return re.sub(
+            r"<header\b[^>]*class=[\"'][^\"']*lecture-module-heading[^\"']*[\"'][^>]*>.*?</header>",
+            heading,
+            lecture_html,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    return _insert_heading(lecture_html, heading)
+
+
+def _heading_html(project_name: str) -> str:
+    safe_title = project_name.strip() or "Lecture"
+    return (
+        '<header class="lecture-module-heading">\n'
+        f"  <h1>{safe_title}</h1>\n"
+        "</header>\n"
+    )
+
+
+def _insert_heading(lecture_html: str, heading: str) -> str:
+    if re.search(r"<main\b[^>]*>", lecture_html, re.IGNORECASE):
+        return re.sub(r"(<main\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
+    if re.search(r"<body\b[^>]*>", lecture_html, re.IGNORECASE):
+        return re.sub(r"(<body\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
+    return heading + lecture_html
+
     safe_title = project_name.strip() or "Lecture"
     heading = (
         '<header class="lecture-module-heading">\n'

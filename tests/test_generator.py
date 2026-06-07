@@ -229,7 +229,7 @@ def test_generate_lecture_writes_expected_package(tmp_path: Path) -> None:
 
     with ZipFile(result.zip_path) as archive:
         names = archive.namelist()
-    assert any(name.endswith("lecture.html") for name in names)
+    assert any(name.endswith(".html") for name in names)
     assert any("script4course/" in name for name in names)
 
 
@@ -429,8 +429,8 @@ def test_two_stage_generation_uses_figure_client_for_scripts(tmp_path: Path) -> 
     assert (result.output_dir / "assets" / "fig_1_1_payoff.png").exists()
     html = result.html_path.read_text(encoding="utf-8")
     assert "lecture-module-heading" in html
-    assert "模块：note" in html
-    assert "Module: note" in html
+    assert "<h1>note</h1>" in html
+    assert "Module: note" not in html
 
 
 def test_failed_figure_script_is_sent_back_to_figure_api_for_debug(tmp_path: Path) -> None:
@@ -527,7 +527,7 @@ def test_figure_specs_are_inserted_when_html_has_no_asset_refs(tmp_path: Path) -
     assert 'src="assets/fig_1_1_forward_contract.png"' in html
     assert "Forward contract payoff as the future spot rate changes" in html
     assert "Transaction and Translation Exposure" in html
-    assert "Module: M3.1 Lecture Ch08 Ch10 Transaction and Translation Exposure" in html
+    assert "<h1>M3.1 Lecture Ch08 Ch10 Transaction and Translation Exposure</h1>" in html
 
 
 def test_sanitize_currency_symbols_prevents_mathjax_currency_errors() -> None:
