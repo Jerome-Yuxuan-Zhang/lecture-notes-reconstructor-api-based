@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Protocol
@@ -29,6 +30,23 @@ class ChatClient(Protocol):
 
 
 LogFn = Callable[[str], None]
+FIGURE_SCRIPT_TIMEOUT_SECONDS = 60
+
+
+@dataclass(slots=True)
+class FigureRunFailure:
+    script_path: Path
+    message: str
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
+
+    def format(self, output_dir: Path) -> str:
+        reason = "timed out" if self.timed_out else "failed"
+        return (
+            f"Figure script {reason}: {self.script_path.relative_to(output_dir)}\n"
+            f"{self.message}\nSTDOUT:\n{self.stdout}\nSTDERR:\n{self.stderr}"
+        )
 
 
 def generate_lecture(
@@ -111,7 +129,13 @@ def generate_lecture(
     lecture_html = _ensure_bilingual_heading(lecture_html, inferred_title)
     lecture_html = ensure_full_html(lecture_html, title=inferred_title)
     script_paths = _write_figure_scripts(scripts_dir, figure_scripts)
-    script_errors = _run_figure_scripts(script_paths, output_dir)
+    script_errors = _run_figure_scripts(
+        script_paths,
+        output_dir,
+        figure_client=figure_client,
+        config=config,
+        log=log,
+    )
     errors.extend(script_errors)
     errors.extend(_missing_asset_errors(lecture_html, output_dir))
 
@@ -518,7 +542,14 @@ def _write_figure_scripts(scripts_dir: Path, figure_scripts: list[dict[str, str]
     return script_paths
 
 
-def _run_figure_scripts(script_paths: list[Path], output_dir: Path) -> list[str]:
+def _run_figure_scripts(
+    script_paths: list[Path],
+    output_dir: Path,
+    *,
+    figure_client: ChatClient | None = None,
+    config: GenerationConfig | None = None,
+    log: LogFn | None = None,
+) -> list[str]:
     errors: list[str] = []
     if not script_paths:
         return errors
@@ -526,21 +557,135 @@ def _run_figure_scripts(script_paths: list[Path], output_dir: Path) -> list[str]
     env.setdefault("MPLBACKEND", "Agg")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     for script_path in script_paths:
+        failure = _run_single_figure_script(script_path, output_dir, env)
+        if failure is None:
+            continue
+        if figure_client is not None:
+            _log(log, f"Figure script failed; asking figure API to debug {script_path.name}.")
+            fixed = _debug_figure_script(script_path, output_dir, failure, figure_client, config)
+            if fixed:
+                script_path.write_text(fixed + "\n", encoding="utf-8")
+                retry_failure = _run_single_figure_script(script_path, output_dir, env)
+                if retry_failure is None:
+                    _log(log, f"Figure script repaired and executed: {script_path.name}.")
+                    continue
+                errors.append(
+                    failure.format(output_dir)
+                    + "\n\nRetry after figure API debug also failed:\n"
+                    + retry_failure.format(output_dir)
+                )
+                continue
+            errors.append(failure.format(output_dir) + "\n\nFigure API did not return a usable repaired script.")
+            continue
+        errors.append(failure.format(output_dir))
+    return errors
+
+
+def _run_single_figure_script(script_path: Path, output_dir: Path, env: dict[str, str]) -> FigureRunFailure | None:
+    try:
         result = subprocess.run(
             [sys.executable, str(script_path)],
             cwd=output_dir,
             env=env,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=FIGURE_SCRIPT_TIMEOUT_SECONDS,
             check=False,
         )
-        if result.returncode != 0:
-            errors.append(
-                f"Figure script failed: {script_path.relative_to(output_dir)}\n"
-                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-            )
-    return errors
+    except subprocess.TimeoutExpired as exc:
+        stdout = _coerce_process_output(exc.stdout)
+        stderr = _coerce_process_output(exc.stderr)
+        return FigureRunFailure(
+            script_path=script_path,
+            message=f"Timed out after {FIGURE_SCRIPT_TIMEOUT_SECONDS} seconds.",
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=True,
+        )
+
+    if result.returncode == 0:
+        return None
+    return FigureRunFailure(
+        script_path=script_path,
+        message=f"Exited with return code {result.returncode}.",
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
+
+
+def _coerce_process_output(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _debug_figure_script(
+    script_path: Path,
+    output_dir: Path,
+    failure: FigureRunFailure,
+    figure_client: ChatClient,
+    config: GenerationConfig | None,
+) -> str | None:
+    original_code = script_path.read_text(encoding="utf-8", errors="replace")
+    response = figure_client.chat(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You repair Python matplotlib/seaborn figure scripts. Return only one repaired "
+                    "FIGURE_SCRIPT block. The script must terminate quickly, create required directories, "
+                    "save the expected assets image, use MPLBACKEND=Agg-compatible code, and avoid network, "
+                    "interactive windows, infinite loops, plt.show(), input(), or long font downloads."
+                ),
+            },
+            {
+                "role": "user",
+                "content": _figure_debug_prompt(script_path, output_dir, original_code, failure),
+            },
+        ],
+        temperature=(config.temperature if config else 0.2),
+        max_tokens=min(config.max_tokens if config else 8192, 32768),
+        stream=False,
+    )
+    scripts, _ = _parse_figure_script_response(response)
+    if scripts:
+        code = str(scripts[0].get("code") or "").strip()
+        return code or None
+    match = re.search(r"```(?:python)?\s*(.*?)```", response, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    stripped = response.strip()
+    if "import " in stripped and "savefig" in stripped:
+        return stripped
+    return None
+
+
+def _figure_debug_prompt(script_path: Path, output_dir: Path, original_code: str, failure: FigureRunFailure) -> str:
+    relative_script = script_path.relative_to(output_dir).as_posix()
+    expected_assets = sorted(set(re.findall(r"""assets[/\\][^"')\s]+\.png""", original_code)))
+    expected_note = "\n".join(f"- {path.replace(chr(92), '/')}" for path in expected_assets) or "- infer from savefig path"
+    return (
+        "Repair this figure script. Keep the same script path and intended image outputs.\n"
+        "Return exactly this format:\n\n"
+        f"<<<FIGURE_SCRIPT:{relative_script}>>>\n"
+        "# complete repaired Python code here\n"
+        "<<<END_FIGURE_SCRIPT>>>\n\n"
+        "Hard requirements:\n"
+        f"- Must finish within {FIGURE_SCRIPT_TIMEOUT_SECONDS} seconds on retry.\n"
+        "- Must use only local computation; no downloads, no web requests, no interactive input.\n"
+        "- Must not call plt.show().\n"
+        "- Must create the assets directory before saving.\n"
+        "- Must save these expected image paths if present:\n"
+        f"{expected_note}\n\n"
+        "Failure report:\n"
+        f"{failure.format(output_dir)}\n\n"
+        "Original script:\n"
+        "```python\n"
+        f"{original_code}\n"
+        "```"
+    )
 
 
 def _ensure_bilingual_heading(lecture_html: str, project_name: str) -> str:

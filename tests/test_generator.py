@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
+import lecture_reconstructor.generator as generator_module
 from lecture_reconstructor.generator import _build_material_digest, _sanitize_currency_symbols, generate_lecture
 from lecture_reconstructor.html_assets import LECTURE_CSS, ensure_full_html
 from lecture_reconstructor.models import GenerationConfig, MaterialDocument
@@ -154,6 +155,26 @@ insert_after: Forward contracts
 from pathlib import Path
 Path('assets').mkdir(exist_ok=True)
 Path('assets/fig_1_1_forward_contract.png').write_text('ok', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
+class BrokenThenFixedFigureClient:
+    def __init__(self, broken_code: str) -> None:
+        self.calls = 0
+        self.debug_prompt = ""
+        self.broken_code = broken_code
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        self.debug_prompt = messages[-1]["content"]
+        if self.calls == 1:
+            return f"""<<<FIGURE_SCRIPT:chapter_1/fig_1_1_payoff.py>>>
+{self.broken_code}
+<<<END_FIGURE_SCRIPT>>>"""
+        return """<<<FIGURE_SCRIPT:chapter_1/fig_1_1_payoff.py>>>
+from pathlib import Path
+Path('assets').mkdir(exist_ok=True)
+Path('assets/fig_1_1_payoff.png').write_text('fixed', encoding='utf-8')
 <<<END_FIGURE_SCRIPT>>>"""
 
 
@@ -410,6 +431,51 @@ def test_two_stage_generation_uses_figure_client_for_scripts(tmp_path: Path) -> 
     assert "lecture-module-heading" in html
     assert "模块：note" in html
     assert "Module: note" in html
+
+
+def test_failed_figure_script_is_sent_back_to_figure_api_for_debug(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    figure_client = BrokenThenFixedFigureClient("raise RuntimeError('bad plot')")
+
+    result = generate_lecture(docs, _config(tmp_path), MainLectureOnlyClient(), figure_client=figure_client)
+
+    assert figure_client.calls == 2
+    assert "bad plot" in figure_client.debug_prompt
+    assert result.errors == []
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").read_text(encoding="utf-8") == "fixed"
+
+
+def test_timed_out_figure_script_is_debugged_by_figure_api(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(generator_module, "FIGURE_SCRIPT_TIMEOUT_SECONDS", 1)
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    figure_client = BrokenThenFixedFigureClient("import time\ntime.sleep(5)")
+
+    result = generate_lecture(docs, _config(tmp_path), MainLectureOnlyClient(), figure_client=figure_client)
+
+    assert figure_client.calls == 2
+    assert "Timed out after 1 seconds" in figure_client.debug_prompt
+    assert result.errors == []
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").exists()
 
 
 def test_figure_specs_are_inserted_when_html_has_no_asset_refs(tmp_path: Path) -> None:
