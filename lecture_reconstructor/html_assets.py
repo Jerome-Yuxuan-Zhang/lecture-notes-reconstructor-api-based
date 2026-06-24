@@ -16,10 +16,14 @@ body {
   line-height: 1.8;
   font-family: inherit;
 }
+body, main, section, article, div, p, li, table, th, td, figcaption, .formula-card,
+.definition-card, .example-card, .warning-card, .compare-card, mjx-container {
+  font-size: 12pt;
+}
 main {
   max-width: 980px;
   margin: 0 auto;
-  padding: 2.54cm;
+  padding: 0;
 }
 h1, h2, h3, h4, table, figcaption, .formula-card {
   font-family: inherit;
@@ -113,12 +117,13 @@ th, td {
   vertical-align: top;
 }
 @page {
-  margin: 2.54cm;
+  margin: 2cm;
 }
 @media print {
   main {
     max-width: none;
     padding: 0;
+    margin: 0;
   }
   a {
     color: inherit;
@@ -175,8 +180,7 @@ def ensure_full_html(content: str, title: str = "Lecture Notes") -> str:
     if "<html" in stripped.lower() and "</html>" in stripped.lower():
         html = _strip_mathjax_scripts(stripped)
         html = html.replace("</head>", f"{MATHJAX_SCRIPT}\n</head>")
-        if ".formula-card" not in html:
-            html = html.replace("</head>", f"<style>{LECTURE_CSS}</style>\n</head>")
+        html = html.replace("</head>", f"<style>{LECTURE_CSS}</style>\n</head>")
         return html
 
     return f"""<!doctype html>

@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 
 from .html_assets import ensure_full_html
 from .models import GenerationConfig, GenerationResult, MaterialDocument
+from .output_checks import print_html_to_pdf, validate_html_image_refs
 from .packaging import package_output
 from .reference_search import format_reference_hits, reference_index, search_references
 
@@ -108,7 +109,6 @@ def generate_lecture(
         stream=config.stream,
     )
 
-    inferred_title = _infer_course_title(documents, config.project_name)
     lecture_html, self_check, figure_scripts = _parse_generation_response(response)
     if figure_client is not None:
         _log(log, "Generating figure scripts with the figure API.")
@@ -124,6 +124,7 @@ def generate_lecture(
         )
         figure_scripts, figure_specs = _parse_figure_script_response(figure_response)
         lecture_html = _inject_missing_figures(lecture_html, figure_specs)
+    inferred_title = _infer_course_title(documents, config.project_name, lecture_html=lecture_html, outline=outline)
     lecture_html = _sanitize_currency_symbols(lecture_html)
     self_check = _sanitize_currency_symbols(self_check)
     lecture_html = _ensure_bilingual_heading(lecture_html, inferred_title)
@@ -145,10 +146,19 @@ def generate_lecture(
         log=log,
     )
     errors.extend(script_errors)
-    errors.extend(_missing_asset_errors(lecture_html, output_dir))
 
     html_path = output_dir / _html_filename(inferred_title)
     html_path.write_text(lecture_html, encoding="utf-8")
+    image_errors = validate_html_image_refs(html_path)
+    errors.extend(image_errors)
+    pdf_path: Path | None = None
+    if not image_errors:
+        try:
+            pdf_path = print_html_to_pdf(html_path, config.output_root)
+            if pdf_path is not None:
+                _log(log, f"Printed PDF: {pdf_path}")
+        except Exception as exc:  # noqa: BLE001 - PDF export is a post-generation convenience.
+            _log(log, f"PDF printing skipped or failed: {exc}")
     self_check_path = output_dir / "self_check.md"
     self_check_path.write_text(self_check or _fallback_self_check(documents), encoding="utf-8")
 
@@ -161,6 +171,7 @@ def generate_lecture(
         "files": len(documents),
         "coverage_summary": coverage_summary,
         "errors": errors,
+        "pdf_path": str(pdf_path) if pdf_path else None,
     }
     manifest["provider"]["api_key_env"] = config.provider.api_key_env
     (output_dir / "manifest.json").write_text(
@@ -203,27 +214,56 @@ def _html_filename(value: str) -> str:
     return f"{name}.html"
 
 
-def _infer_course_title(documents: list[MaterialDocument], fallback: str) -> str:
-    fallback_title = _topic_title_from_value(fallback)
-    if fallback_title:
-        return fallback_title
+def _infer_course_title(
+    documents: list[MaterialDocument],
+    fallback: str,
+    *,
+    lecture_html: str = "",
+    outline: str = "",
+) -> str:
     candidates: list[str] = []
+    candidates.extend(_html_title_candidates(lecture_html))
+    candidates.extend(_outline_title_candidates(outline))
     for doc in documents:
-        stem = Path(doc.relative_path).stem
-        cleaned = _clean_title_candidate(stem)
-        if cleaned:
-            candidates.append(cleaned)
         for line in doc.text.splitlines()[:40]:
             line = line.strip()
             if not line or len(line) > 120:
                 continue
-            if re.search(r"(module|chapter|lecture|workshop|transaction|translation|exposure|风险|汇率|金融)", line, re.IGNORECASE):
+            if re.search(
+                r"(topic|module|chapter|lecture|workshop|overview|market|markets|bank|banks|debt|equity|derivatives|risk|rate|rates|foreign exchange|government|transaction|translation|exposure)",
+                line,
+                re.IGNORECASE,
+            ):
                 cleaned_line = _clean_title_candidate(line)
-                if cleaned_line:
+                if cleaned_line and not _is_generic_heading(cleaned_line):
                     candidates.append(cleaned_line)
     if candidates:
-        return max(candidates, key=_title_score)
-    return fallback.strip() or "Lecture"
+        return max(candidates, key=_title_score).strip()
+    fallback_title = _topic_title_from_value(fallback)
+    if fallback_title:
+        return fallback_title
+    return _clean_title_candidate(fallback) or "Lecture"
+
+
+def _html_title_candidates(html: str) -> list[str]:
+    candidates: list[str] = []
+    for match in re.finditer(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", html, re.IGNORECASE | re.DOTALL):
+        text = re.sub(r"<[^>]+>", " ", match.group(1))
+        text = re.sub(r"\s+", " ", text).strip()
+        cleaned = _clean_title_candidate(text)
+        if cleaned and not _is_generic_heading(cleaned):
+            candidates.append(cleaned)
+    return candidates[:8]
+
+
+def _outline_title_candidates(outline: str) -> list[str]:
+    candidates: list[str] = []
+    for line in outline.splitlines()[:40]:
+        line = re.sub(r"^[#*\-\d.\s]+", "", line).strip()
+        cleaned = _clean_title_candidate(line)
+        if cleaned and not _is_generic_heading(cleaned):
+            candidates.append(cleaned)
+    return candidates[:8]
 
 
 def _topic_title_from_value(value: str) -> str | None:
@@ -247,14 +287,41 @@ def _topic_title_from_value(value: str) -> str | None:
 
 def _clean_title_candidate(value: str) -> str:
     value = re.sub(r"[_-]+", " ", value)
-    value = re.sub(r"\b(pdf|pptx|docx|xlsx|csv|solution|reference|formula|sheet)\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^(outline|title|chapter title|module title)\s*:\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"\b(pdf|pptx|docx|xlsx|csv|solution|reference|formula|sheet|viney9e|ppt|notes?)\b",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"\b\d{5,}\b", "", value)
     value = re.sub(r"\s+", " ", value).strip(" -_")
     return value
 
 
+def _is_generic_heading(value: str) -> bool:
+    lowered = value.casefold().strip()
+    generic = {
+        "glossary",
+        "glossary / terms",
+        "terms",
+        "quick review",
+        "\u672f\u8bed\u8868",
+        "\u672f\u8bed\u8868 / glossary",
+        "10 \u5206\u949f\u901f\u8bb0\u533a",
+        "chapter outline",
+        "outline",
+        "introduction",
+        "learning objectives",
+        "module",
+        "lecture",
+    }
+    return lowered in generic or lowered.startswith(("\u6a21\u5757\uff1a", "module:"))
+
+
 def _title_score(value: str) -> tuple[int, int]:
     keywords = re.findall(
-        r"(module|chapter|lecture|transaction|translation|exposure|international|finance|风险|汇率|金融|交易|折算)",
+        r"(topic|chapter|overview|financial|system|interest|rate|risk|market|markets|bank|banks|debt|equity|derivatives|government|foreign|exchange|transaction|translation|exposure|international|finance)",
         value,
         flags=re.IGNORECASE,
     )
@@ -811,19 +878,6 @@ def _heading_html(project_name: str) -> str:
 
 
 def _insert_heading(lecture_html: str, heading: str) -> str:
-    if re.search(r"<main\b[^>]*>", lecture_html, re.IGNORECASE):
-        return re.sub(r"(<main\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
-    if re.search(r"<body\b[^>]*>", lecture_html, re.IGNORECASE):
-        return re.sub(r"(<body\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
-    return heading + lecture_html
-
-    safe_title = project_name.strip() or "Lecture"
-    heading = (
-        '<header class="lecture-module-heading">\n'
-        f"  <h1>模块：{safe_title}</h1>\n"
-        f"  <h2>Module: {safe_title}</h2>\n"
-        "</header>\n"
-    )
     if re.search(r"<main\b[^>]*>", lecture_html, re.IGNORECASE):
         return re.sub(r"(<main\b[^>]*>)", rf"\1\n{heading}", lecture_html, count=1, flags=re.IGNORECASE)
     if re.search(r"<body\b[^>]*>", lecture_html, re.IGNORECASE):
