@@ -149,7 +149,15 @@ def generate_lecture(
 
     html_path = output_dir / _html_filename(inferred_title)
     html_path.write_text(lecture_html, encoding="utf-8")
-    image_errors = validate_html_image_refs(html_path)
+    image_errors = _repair_html_image_refs(
+        html_path,
+        output_dir,
+        scripts_dir,
+        script_paths,
+        figure_client=figure_client,
+        config=config,
+        log=log,
+    )
     errors.extend(image_errors)
     pdf_path: Path | None = None
     if not image_errors:
@@ -684,6 +692,190 @@ def _run_figure_scripts(
             continue
         errors.append(failure.format(output_dir))
     return errors
+
+
+def _repair_html_image_refs(
+    html_path: Path,
+    output_dir: Path,
+    scripts_dir: Path,
+    script_paths: list[Path],
+    *,
+    figure_client: ChatClient | None = None,
+    config: GenerationConfig | None = None,
+    log: LogFn | None = None,
+) -> list[str]:
+    validation_errors = validate_html_image_refs(html_path)
+    missing_refs = _missing_image_refs(validation_errors)
+    if not missing_refs:
+        return validation_errors
+
+    _log(log, f"Image validation found {len(missing_refs)} missing asset(s).")
+    repaired_errors: list[str] = []
+    rerun_paths = _scripts_for_missing_refs(script_paths, missing_refs)
+    if rerun_paths:
+        _log(log, f"Re-running {len(rerun_paths)} existing figure script(s) for missing assets.")
+        repaired_errors.extend(
+            _run_figure_scripts(
+                rerun_paths,
+                output_dir,
+                figure_client=figure_client,
+                config=config,
+                log=log,
+            )
+        )
+        validation_errors = validate_html_image_refs(html_path)
+        missing_refs = _missing_image_refs(validation_errors)
+        if not missing_refs:
+            return repaired_errors
+
+    refs_without_scripts = _refs_without_matching_scripts(script_paths, missing_refs)
+    if refs_without_scripts:
+        _log(log, "Missing image(s) have no matching script: " + ", ".join(refs_without_scripts))
+
+    if missing_refs and figure_client is not None:
+        _log(log, "Asking figure API to create repair script(s) for missing image assets.")
+        new_scripts = _create_missing_image_scripts(html_path, missing_refs, figure_client, config)
+        new_paths = _write_figure_scripts(scripts_dir, new_scripts)
+        script_paths.extend(new_paths)
+        repaired_errors.extend(
+            _repair_non_ascii_figure_scripts(
+                new_paths,
+                output_dir,
+                figure_client=figure_client,
+                config=config,
+                log=log,
+            )
+        )
+        repaired_errors.extend(
+            _run_figure_scripts(
+                new_paths,
+                output_dir,
+                figure_client=figure_client,
+                config=config,
+                log=log,
+            )
+        )
+        validation_errors = validate_html_image_refs(html_path)
+
+    return repaired_errors + validation_errors
+
+
+def _missing_image_refs(errors: list[str]) -> list[str]:
+    refs: list[str] = []
+    prefix = "Referenced image does not exist: "
+    for error in errors:
+        if error.startswith(prefix):
+            refs.append(error[len(prefix) :].strip())
+    return sorted(set(refs))
+
+
+def _scripts_for_missing_refs(script_paths: list[Path], missing_refs: list[str]) -> list[Path]:
+    matches: list[Path] = []
+    for script_path in script_paths:
+        code = script_path.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+        if any(_script_mentions_ref(code, ref) for ref in missing_refs):
+            matches.append(script_path)
+    return _unique_paths(matches)
+
+
+def _refs_without_matching_scripts(script_paths: list[Path], missing_refs: list[str]) -> list[str]:
+    without_scripts: list[str] = []
+    script_codes = [
+        script_path.read_text(encoding="utf-8", errors="replace").replace("\\", "/")
+        for script_path in script_paths
+    ]
+    for ref in missing_refs:
+        if not any(_script_mentions_ref(code, ref) for code in script_codes):
+            without_scripts.append(ref)
+    return without_scripts
+
+
+def _script_mentions_ref(code: str, ref: str) -> bool:
+    normalized = ref.replace("\\", "/")
+    return normalized in code or Path(normalized).name in code
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
+
+
+def _create_missing_image_scripts(
+    html_path: Path,
+    missing_refs: list[str],
+    figure_client: ChatClient,
+    config: GenerationConfig | None,
+) -> list[dict[str, str]]:
+    response = figure_client.chat(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You create Python matplotlib/seaborn figure scripts for missing lecture assets. "
+                    "Return only FIGURE_SCRIPT blocks. Scripts must terminate quickly, create required "
+                    "directories, save exactly the requested assets paths, use MPLBACKEND=Agg-compatible "
+                    "code, and avoid network, interactive windows, plt.show(), input(), or downloads. "
+                    "All visible plot text must be English-only ASCII."
+                ),
+            },
+            {"role": "user", "content": _missing_image_script_prompt(html_path, missing_refs)},
+        ],
+        temperature=(config.temperature if config else 0.2),
+        max_tokens=min(config.max_tokens if config else 8192, 32768),
+        stream=False,
+    )
+    scripts, _ = _parse_figure_script_response(response)
+    return scripts
+
+
+def _missing_image_script_prompt(html_path: Path, missing_refs: list[str]) -> str:
+    html = html_path.read_text(encoding="utf-8", errors="replace")
+    target_lines = "\n".join(f"- {ref}" for ref in missing_refs)
+    contexts = "\n\n".join(_image_ref_context(html, ref) for ref in missing_refs)
+    example_blocks = "\n".join(
+        (
+            f"<<<FIGURE_SCRIPT:repair_missing_assets/{Path(ref).stem}.py>>>\n"
+            "# complete Python code here\n"
+            f"# must save {ref}\n"
+            "<<<END_FIGURE_SCRIPT>>>"
+        )
+        for ref in missing_refs
+    )
+    return (
+        "The lecture HTML references image assets that do not exist after the normal figure-generation pass.\n"
+        "Create repair scripts that regenerate the missing image files.\n\n"
+        "Missing image paths:\n"
+        f"{target_lines}\n\n"
+        "HTML context around each missing image:\n"
+        f"{contexts}\n\n"
+        "Return exactly one or more FIGURE_SCRIPT blocks in this style:\n\n"
+        f"{example_blocks}\n\n"
+        "Hard requirements:\n"
+        f"- Each script must finish within {FIGURE_SCRIPT_TIMEOUT_SECONDS} seconds.\n"
+        "- Use only local computation; no downloads, no web requests, no interactive input.\n"
+        "- Do not call plt.show().\n"
+        "- Create the assets directory before saving.\n"
+        "- Save every requested path exactly, relative to the output package root.\n"
+        "- Use seaborn/matplotlib and export at dpi=200 with bbox_inches='tight'.\n"
+        "- The Python source must contain only ASCII characters.\n"
+        "- All visible chart labels, titles, legends, and annotations must be English-only ASCII."
+    )
+
+
+def _image_ref_context(html: str, ref: str, radius: int = 700) -> str:
+    index = html.find(ref)
+    if index < 0:
+        return f"[{ref}]\nNo direct context found."
+    start = max(0, index - radius)
+    end = min(len(html), index + len(ref) + radius)
+    snippet = re.sub(r"\s+", " ", html[start:end]).strip()
+    return f"[{ref}]\n{snippet}"
 
 
 def _repair_non_ascii_figure_scripts(

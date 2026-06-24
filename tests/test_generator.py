@@ -125,6 +125,41 @@ Path('assets/fig_1_1_payoff.png').write_text('ok', encoding='utf-8')
 <<<END_FIGURE_SCRIPT>>>"""
 
 
+class FlakyAssetFigureScriptClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        return """<<<FIGURE_SCRIPT:chapter_1/fig_1_1_payoff.py>>>
+from pathlib import Path
+Path('assets').mkdir(exist_ok=True)
+marker = Path('assets/fig_1_1_payoff.once')
+target = Path('assets/fig_1_1_payoff.png')
+if marker.exists():
+    target.write_text('created on repair rerun', encoding='utf-8')
+else:
+    marker.write_text('first run produced no image', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
+class EmptyThenMissingAssetRepairClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.repair_prompt = ""
+
+    def chat(self, messages: list[dict], **kwargs: object) -> str:
+        self.calls += 1
+        if self.calls == 1:
+            return ""
+        self.repair_prompt = messages[-1]["content"]
+        return """<<<FIGURE_SCRIPT:repair_missing_assets/fig_1_1_payoff.py>>>
+from pathlib import Path
+Path('assets').mkdir(exist_ok=True)
+Path('assets/fig_1_1_payoff.png').write_text('created by missing asset repair', encoding='utf-8')
+<<<END_FIGURE_SCRIPT>>>"""
+
+
 class NoFigureMainClient:
     def __init__(self) -> None:
         self.calls = 0
@@ -469,6 +504,51 @@ def test_two_stage_generation_uses_figure_client_for_scripts(tmp_path: Path) -> 
     assert "lecture-module-heading" in html
     assert "<h1>Chapter 1 Test</h1>" in html
     assert "Module: note" not in html
+
+
+def test_missing_asset_validation_reruns_existing_matching_script(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    figure_client = FlakyAssetFigureScriptClient()
+
+    result = generate_lecture(docs, _config(tmp_path), MainLectureOnlyClient(), figure_client=figure_client)
+
+    assert figure_client.calls == 1
+    assert result.errors == []
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").read_text(encoding="utf-8") == "created on repair rerun"
+
+
+def test_missing_asset_validation_creates_script_when_none_exists(tmp_path: Path) -> None:
+    doc_path = tmp_path / "note.md"
+    doc_path.write_text("Concept A", encoding="utf-8")
+    docs = [
+        MaterialDocument(
+            source_path=doc_path,
+            relative_path="note.md",
+            material_type="md",
+            text="Concept A",
+            status="extracted",
+        )
+    ]
+    figure_client = EmptyThenMissingAssetRepairClient()
+
+    result = generate_lecture(docs, _config(tmp_path), MainLectureOnlyClient(), figure_client=figure_client)
+
+    assert figure_client.calls == 2
+    assert "assets/fig_1_1_payoff.png" in figure_client.repair_prompt
+    assert "do not exist" in figure_client.repair_prompt
+    assert result.errors == []
+    assert (result.output_dir / "assets" / "fig_1_1_payoff.png").read_text(encoding="utf-8") == "created by missing asset repair"
+    assert (result.output_dir / "script4course" / "repair_missing_assets" / "fig_1_1_payoff.py").exists()
 
 
 def test_failed_figure_script_is_sent_back_to_figure_api_for_debug(tmp_path: Path) -> None:
